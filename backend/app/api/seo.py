@@ -1,0 +1,362 @@
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, PlainTextResponse
+from sqlalchemy.orm import Session
+from app.db.database import get_db
+from app.models import Conversion
+from app.services.bot_detection import bot_detector
+from app.core.config import settings
+import logging
+from datetime import datetime
+from urllib.parse import quote_plus
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+@router.get("/read/{slug}")
+async def get_seo_page(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serve SEO-optimized pages for conversions
+    - Returns HTML for human users (browsers)
+    - Returns raw markdown for bots/crawlers
+    """
+    
+    # Get user agent from request headers
+    user_agent = request.headers.get("user-agent", "")
+    
+    # Find conversion by slug
+    conversion = db.query(Conversion).filter(
+        Conversion.slug == slug,
+        Conversion.is_public == True  # Only serve public conversions
+    ).first()
+    
+    if not conversion:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Page not found"
+        )
+    
+    # Increment view count
+    conversion.view_count += 1
+    db.commit()
+    
+    # Detect if request is from a bot/crawler
+    should_serve_markdown = bot_detector.should_serve_markdown(user_agent)
+    
+    # Log bot access for monitoring
+    bot_detector.log_bot_access(user_agent, slug, should_serve_markdown)
+    
+    if should_serve_markdown:
+        return await serve_markdown_content(conversion, request)
+    else:
+        return await serve_html_content(conversion, request)
+
+async def serve_markdown_content(conversion: Conversion, request: Request) -> PlainTextResponse:
+    """Serve raw markdown content for bots and crawlers"""
+    
+    # Add metadata header for markdown
+    markdown_content = f"""# {conversion.title}
+
+**Source:** {conversion.source_url}
+**Domain:** {conversion.domain}
+**Published:** {conversion.created_at.strftime('%Y-%m-%d')}
+**Word Count:** {conversion.word_count}
+**Reading Time:** {conversion.reading_time} minutes
+
+---
+
+{conversion.content}
+
+---
+*Converted by ctxt.help - The LLM Context Builder*
+*Permanent link: https://ctxt.help/read/{conversion.slug}*
+"""
+    
+    # Set appropriate headers for crawlers
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "public, max-age=3600",
+        "X-Robots-Tag": "index, follow",
+        "X-Content-Type": "markdown"
+    }
+    
+    return PlainTextResponse(
+        content=markdown_content,
+        headers=headers,
+        media_type="text/plain"
+    )
+
+async def serve_html_content(conversion: Conversion, request: Request) -> HTMLResponse:
+    """Serve rich HTML content for human users"""
+    
+    # Calculate additional metadata
+    estimated_read_time = max(1, conversion.word_count // 200)
+    
+    # Format publish date
+    publish_date = conversion.created_at.strftime('%B %d, %Y')
+    
+    # Create meta description (truncated if needed)
+    meta_description = conversion.meta_description or conversion.content[:155] + "..."
+    if len(meta_description) > 155:
+        meta_description = meta_description[:152] + "..."
+    
+    # Generate structured data for SEO
+    structured_data = {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": conversion.title,
+        "description": meta_description,
+        "url": f"https://ctxt.help/read/{conversion.slug}",
+        "datePublished": conversion.created_at.isoformat(),
+        "dateModified": conversion.updated_at.isoformat() if conversion.updated_at else conversion.created_at.isoformat(),
+        "author": {
+            "@type": "Organization",
+            "name": "ctxt.help"
+        },
+        "publisher": {
+            "@type": "Organization",
+            "name": "ctxt.help",
+            "url": "https://ctxt.help"
+        },
+        "wordCount": conversion.word_count,
+        "articleBody": conversion.content[:500] + "...",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": f"https://ctxt.help/read/{conversion.slug}"
+        }
+    }
+    
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{conversion.title} | ctxt.help</title>
+    
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="{meta_description}">
+    <meta name="keywords" content="markdown, converter, AI, LLM, context, {conversion.domain}">
+    <meta name="author" content="ctxt.help">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://ctxt.help/read/{conversion.slug}">
+    
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="{conversion.title}">
+    <meta property="og:description" content="{meta_description}">
+    <meta property="og:url" content="https://ctxt.help/read/{conversion.slug}">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="ctxt.help">
+    <meta property="article:published_time" content="{conversion.created_at.isoformat()}">
+    <meta property="article:author" content="ctxt.help">
+    
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{conversion.title}">
+    <meta name="twitter:description" content="{meta_description}">
+    <meta name="twitter:url" content="https://ctxt.help/read/{conversion.slug}">
+    
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {structured_data}
+    </script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Styles -->
+    <style>
+        .content-container {{
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 1.7;
+        }}
+        .content-container h1, .content-container h2, .content-container h3 {{
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }}
+        .content-container p {{
+            margin-bottom: 1rem;
+        }}
+        .content-container ul, .content-container ol {{
+            margin-bottom: 1rem;
+            padding-left: 1.5rem;
+        }}
+        .content-container blockquote {{
+            border-left: 4px solid #3b82f6;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            font-style: italic;
+            background-color: #f8fafc;
+        }}
+        .content-container code {{
+            background-color: #f1f5f9;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-family: 'Courier New', monospace;
+        }}
+        .content-container pre {{
+            background-color: #1e293b;
+            color: #f1f5f9;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }}
+        .content-container pre code {{
+            background-color: transparent;
+            padding: 0;
+        }}
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="bg-white shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <a href="https://ctxt.help" class="text-2xl font-bold text-blue-600">ctxt.help</a>
+                <div class="text-sm text-gray-600">
+                    <span>{conversion.view_count} views</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-6xl mx-auto px-4 py-8">
+        <article class="bg-white rounded-lg shadow-sm p-8">
+            <!-- Article Header -->
+            <header class="mb-8 pb-6 border-b border-gray-200">
+                <h1 class="text-4xl font-bold text-gray-900 mb-4">{conversion.title}</h1>
+                
+                <div class="flex flex-wrap items-center gap-4 text-sm text-gray-600 mb-4">
+                    <span>📅 {publish_date}</span>
+                    <span>🌐 <a href="{conversion.source_url}" class="text-blue-600 hover:underline" target="_blank" rel="noopener">{conversion.domain}</a></span>
+                    <span>📖 {conversion.word_count} words</span>
+                    <span>⏱️ {estimated_read_time} min read</span>
+                </div>
+                
+                <div class="flex flex-wrap gap-2">
+                    <a href="{conversion.source_url}" 
+                       class="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors"
+                       target="_blank" rel="noopener">
+                        🔗 View Original
+                    </a>
+                    <button onclick="copyToClipboard()" 
+                            class="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                        📋 Copy Link
+                    </button>
+                    <button onclick="shareContent()" 
+                            class="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                        📤 Share
+                    </button>
+                </div>
+            </header>
+
+            <!-- Article Content -->
+            <div class="content-container prose prose-lg max-w-none">
+                <div id="markdown-content">{conversion.content}</div>
+            </div>
+            
+            <!-- Article Footer -->
+            <footer class="mt-12 pt-8 border-t border-gray-200">
+                <div class="text-sm text-gray-600">
+                    <p>This content was converted from <a href="{conversion.source_url}" class="text-blue-600 hover:underline" target="_blank" rel="noopener">{conversion.source_url}</a> using <a href="https://ctxt.help" class="text-blue-600 hover:underline">ctxt.help</a> - The LLM Context Builder.</p>
+                    <p class="mt-2">Permanent link: <span class="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/read/{conversion.slug}</span></p>
+                </div>
+            </footer>
+        </article>
+        
+        <!-- Call to Action -->
+        <div class="mt-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg p-6 text-white text-center">
+            <h3 class="text-xl font-bold mb-2">Convert Your Own URLs</h3>
+            <p class="mb-4">Transform any webpage into clean markdown perfect for AI and LLM contexts</p>
+            <a href="https://ctxt.help" class="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
+                Try ctxt.help Free
+            </a>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-gray-200 mt-16">
+        <div class="max-w-6xl mx-auto px-4 py-8">
+            <div class="text-center text-sm text-gray-600">
+                <p>&copy; 2025 ctxt.help - The LLM Context Builder</p>
+                <div class="mt-2 space-x-4">
+                    <a href="https://ctxt.help" class="hover:text-blue-600">Home</a>
+                    <a href="https://ctxt.help/about" class="hover:text-blue-600">About</a>
+                    <a href="https://ctxt.help/privacy" class="hover:text-blue-600">Privacy</a>
+                    <a href="https://ctxt.help/terms" class="hover:text-blue-600">Terms</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script>
+        function copyToClipboard() {{
+            navigator.clipboard.writeText(window.location.href).then(() => {{
+                alert('Link copied to clipboard!');
+            }}).catch(() => {{
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = window.location.href;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('Link copied to clipboard!');
+            }});
+        }}
+        
+        function shareContent() {{
+            if (navigator.share) {{
+                navigator.share({{
+                    title: document.title,
+                    url: window.location.href
+                }});
+            }} else {{
+                copyToClipboard();
+            }}
+        }}
+        
+        // Simple markdown to HTML conversion for content
+        document.addEventListener('DOMContentLoaded', function() {{
+            const content = document.getElementById('markdown-content');
+            let html = content.innerHTML;
+            
+            // Convert markdown headers
+            html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+            html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+            html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+            
+            // Convert bold
+            html = html.replace(/\\*\\*(.*?)\\*\\*/gim, '<strong>$1</strong>');
+            
+            // Convert italic
+            html = html.replace(/\\*(.*?)\\*/gim, '<em>$1</em>');
+            
+            // Convert links
+            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2" class="text-blue-600 hover:underline" target="_blank" rel="noopener">$1</a>');
+            
+            // Convert line breaks to paragraphs
+            html = html.replace(/\n\n/gim, '</p><p>');
+            html = '<p>' + html + '</p>';
+            
+            content.innerHTML = html;
+        }});
+    </script>
+</body>
+</html>"""
+    
+    return HTMLResponse(
+        content=html_content,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Robots-Tag": "index, follow"
+        }
+    )

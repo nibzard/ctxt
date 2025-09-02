@@ -153,12 +153,19 @@ try:
 except ImportError as e:
     print(f"⚠️  Could not load payment routes: {e}")
 
+# SEO Routes
+try:
+    from app.api import seo
+    app.include_router(seo.router, prefix="", tags=["seo"])
+    print("✅ SEO routes loaded")
+except ImportError as e:
+    print(f"⚠️  Could not load SEO routes: {e}")
+
 # Additional routes will be added here
-# TODO: Implement MCP, SEO, and user management routes
-# from app.api import users, mcp, seo
+# TODO: Implement MCP and user management routes
+# from app.api import users, mcp
 # app.include_router(users.router, prefix="/api/users", tags=["users"])
 # app.include_router(mcp.router, prefix="/api/mcp", tags=["mcp"])
-# app.include_router(seo.router, prefix="", tags=["seo"])
 
 # Exception handlers
 @app.exception_handler(404)
