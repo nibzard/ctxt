@@ -11,14 +11,23 @@ class Settings(BaseSettings):
     environment: str = "development"
     
     # Database
-    database_url: str = "postgresql://ctxt_user:ctxt_password@192.168.117.2:5432/ctxt_help"
+    database_url: str = os.getenv("DATABASE_URL", "postgresql://ctxt_user:ctxt_password@localhost:5432/ctxt_help")
     sql_debug: bool = False
     
     # Redis
-    redis_url: str = "redis://localhost:6379"
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     
     # Authentication
-    jwt_secret_key: str = "your-super-secret-jwt-key-change-this-in-production"
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", "")
+    
+    @field_validator('jwt_secret_key')
+    @classmethod
+    def validate_jwt_secret(cls, v):
+        if not v or v == "your-super-secret-jwt-key-change-this-in-production":
+            raise ValueError("JWT_SECRET_KEY must be set to a secure random string")
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
+        return v
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
@@ -59,6 +68,11 @@ class Settings(BaseSettings):
     polar_webhook_secret: Optional[str] = None
     polar_organization_id: Optional[str] = None
     polar_success_url: Optional[str] = None
+    
+    # Polar Product IDs (replace with actual product IDs from Polar dashboard)
+    polar_power_product_id: Optional[str] = os.getenv("POLAR_POWER_PRODUCT_ID")
+    polar_pro_product_id: Optional[str] = os.getenv("POLAR_PRO_PRODUCT_ID")
+    polar_enterprise_product_id: Optional[str] = os.getenv("POLAR_ENTERPRISE_PRODUCT_ID")
     
     # Monitoring
     sentry_dsn: Optional[str] = None

@@ -39,7 +39,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ctxt_user:ctxt_password@postgresql:5432/ctxt_help
       REDIS_URL: redis://redis:6379
-      JWT_SECRET_KEY: dev-secret-key-change-in-production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-please-set-jwt-secret-key-in-env}
       DEBUG: "true"
       LOG_LEVEL: debug
     volumes:

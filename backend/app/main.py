@@ -3,9 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.error_handlers import setup_error_handlers
+from app.middleware.logging import LoggingMiddleware, SecurityHeadersMiddleware, RateLimitLogMiddleware
 from app.db.database import get_db, create_database
 from app.models import User, Conversion, ContextStack
 import os
+import logging
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO if not settings.debug else logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
@@ -17,6 +27,16 @@ app = FastAPI(
     debug=settings.debug
 )
 
+# Add middleware in correct order (last added is executed first)
+# Security headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limit logging
+app.add_middleware(RateLimitLogMiddleware)
+
+# Request logging
+app.add_middleware(LoggingMiddleware)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -25,6 +45,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Setup error handlers
+setup_error_handlers(app)
 
 @app.on_event("startup")
 async def startup_event():
@@ -102,12 +125,26 @@ async def get_stats(db: Session = Depends(get_db)):
         }
 
 # API Routes
-# try:
-#     from app.api import conversions
-#     app.include_router(conversions.router, prefix="/api", tags=["conversions"])
-#     print("✅ Conversions API routes loaded")
-# except ImportError as e:
-#     print(f"⚠️  Could not load conversions routes: {e}")
+try:
+    from app.api import conversions
+    app.include_router(conversions.router, prefix="/api", tags=["conversions"])
+    print("✅ Conversions API routes loaded")
+except ImportError as e:
+    print(f"⚠️  Could not load conversions routes: {e}")
+
+try:
+    from app.api import auth
+    app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
+    print("✅ Auth API routes loaded")
+except ImportError as e:
+    print(f"⚠️  Could not load auth routes: {e}")
+
+try:
+    from app.api import context_stacks
+    app.include_router(context_stacks.router, prefix="/api/context-stacks", tags=["context-stacks"])
+    print("✅ Context Stacks API routes loaded")
+except ImportError as e:
+    print(f"⚠️  Could not load context stacks routes: {e}")
 
 try:
     from app.api import payment
@@ -117,8 +154,8 @@ except ImportError as e:
     print(f"⚠️  Could not load payment routes: {e}")
 
 # Additional routes will be added here
-# from app.api import auth, users, mcp, seo
-# app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
+# TODO: Implement MCP, SEO, and user management routes
+# from app.api import users, mcp, seo
 # app.include_router(users.router, prefix="/api/users", tags=["users"])
 # app.include_router(mcp.router, prefix="/api/mcp", tags=["mcp"])
 # app.include_router(seo.router, prefix="", tags=["seo"])

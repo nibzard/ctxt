@@ -70,7 +70,7 @@ const ConversionForm: React.FC = () => {
                   setUrl(e.target.value);
                   if (error) clearError();
                 }}
-                placeholder="https://example.com/article"
+                placeholder="Paste any URL (e.g., https://docs.anthropic.com/claude/docs)"
                 className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={loading}
               />

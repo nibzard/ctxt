@@ -8,6 +8,9 @@ import json
 import logging
 
 from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 from app.core.auth import get_current_user
 from app.db.database import get_db
 from app.models import User
@@ -231,10 +234,13 @@ async def handle_polar_webhook(
 async def list_products():
     """List available products and pricing"""
     try:
-        # Return static product configuration with real product IDs
-        products = [
-            {
-                "id": "d8f00ab0-5727-43b8-8799-c9679750d7fe",  # Example Power User product ID
+        # Product configuration - uses environment variables for product IDs
+        products = []
+        
+        # Power User tier
+        if settings.polar_power_product_id:
+            products.append({
+                "id": settings.polar_power_product_id,
                 "name": "Power User",
                 "description": "Unlimited conversions, library, exports, and browser extension",
                 "price": 5,
@@ -249,9 +255,12 @@ async def list_products():
                     "Browser extension",
                     "Priority conversion"
                 ]
-            },
-            {
-                "id": "pro_monthly_product_id",  # Replace with actual Pro product ID from Polar
+            })
+        
+        # Pro tier
+        if settings.polar_pro_product_id:
+            products.append({
+                "id": settings.polar_pro_product_id,
                 "name": "Pro",
                 "description": "AI integration, API access, and team features",
                 "price": 15,
@@ -267,8 +276,43 @@ async def list_products():
                     "Analytics dashboard",
                     "Priority support"
                 ]
-            }
-        ]
+            })
+        
+        # Enterprise tier (custom pricing)
+        if settings.polar_enterprise_product_id:
+            products.append({
+                "id": settings.polar_enterprise_product_id,
+                "name": "Enterprise",
+                "description": "Self-hosted, custom features, and dedicated support",
+                "price": None,  # Custom pricing
+                "currency": "USD",
+                "interval": "custom",
+                "tier": "enterprise",
+                "features": [
+                    "Self-hosted MCP server",
+                    "Custom rate limits",
+                    "SSO integration",
+                    "Custom features",
+                    "SLA guarantees",
+                    "Dedicated support"
+                ],
+                "contact_required": True
+            })
+        
+        # If no product IDs are configured, show warning
+        if not products:
+            logger.warning("No Polar product IDs configured. Payment functionality will be limited.")
+            products.append({
+                "id": "configuration_required",
+                "name": "Configuration Required",
+                "description": "Polar product IDs need to be configured",
+                "price": 0,
+                "currency": "USD",
+                "interval": "month",
+                "tier": "free",
+                "features": ["Configuration required"],
+                "disabled": True
+            })
         
         return {"products": products}
         

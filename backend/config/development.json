@@ -1,0 +1,27 @@
+{
+  "app": {
+    "debug": true
+  },
+  "database": {
+    "sql_debug": true,
+    "pool_size": 2,
+    "max_overflow": 5
+  },
+  "cors": {
+    "allowed_origins": [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://127.0.0.1:5173",
+      "http://127.0.0.1:3000"
+    ]
+  },
+  "rate_limiting": {
+    "free_daily": 20
+  },
+  "features": {
+    "analytics_enabled": false
+  },
+  "external_apis": {
+    "jina_fallback_enabled": true
+  }
+}

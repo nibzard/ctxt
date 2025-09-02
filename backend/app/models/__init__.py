@@ -19,6 +19,7 @@ class User(Base):
     # Usage tracking
     usage_count = Column(Integer, default=0)
     last_reset_at = Column(DateTime(timezone=True), default=func.now())
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     
     # Subscription info
     subscription_ends_at = Column(DateTime(timezone=True), nullable=True)

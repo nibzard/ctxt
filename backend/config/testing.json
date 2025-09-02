@@ -1,0 +1,44 @@
+{
+  "app": {
+    "debug": true
+  },
+  "database": {
+    "url": "sqlite:///:memory:",
+    "sql_debug": false,
+    "pool_size": 1
+  },
+  "redis": {
+    "url": "redis://localhost:6379/1"
+  },
+  "auth": {
+    "jwt_secret_key": "test-jwt-secret-key-for-testing-only-min-32-chars",
+    "jwt_access_token_expire_minutes": 15,
+    "jwt_refresh_token_expire_days": 1
+  },
+  "cors": {
+    "allowed_origins": ["*"]
+  },
+  "rate_limiting": {
+    "free_daily": 1000,
+    "power_daily": "unlimited",
+    "pro_daily": "unlimited"
+  },
+  "features": {
+    "mcp_server_enabled": false,
+    "seo_pages_enabled": false,
+    "analytics_enabled": false
+  },
+  "external_apis": {
+    "jina_fallback_enabled": true
+  },
+  "payment": {
+    "polar_access_token": null,
+    "polar_webhook_secret": null
+  },
+  "email": {
+    "smtp_host": null
+  },
+  "monitoring": {
+    "sentry_dsn": null
+  }
+}

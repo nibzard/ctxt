@@ -1,0 +1,35 @@
+{
+  "app": {
+    "debug": false
+  },
+  "database": {
+    "sql_debug": false,
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 30
+  },
+  "cors": {
+    "allowed_origins": [
+      "https://ctxt.help",
+      "https://www.ctxt.help",
+      "https://app.ctxt.help"
+    ],
+    "max_age": 86400
+  },
+  "rate_limiting": {
+    "free_daily": 5,
+    "window_size": 86400
+  },
+  "features": {
+    "analytics_enabled": true,
+    "mcp_server_enabled": true,
+    "seo_pages_enabled": true
+  },
+  "external_apis": {
+    "jina_fallback_enabled": false
+  },
+  "redis": {
+    "socket_timeout": 10,
+    "socket_connect_timeout": 10
+  }
+}

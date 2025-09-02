@@ -1,282 +1,316 @@
-from typing import Optional, Dict, Any, List
-import asyncio
-from datetime import datetime, timedelta
-import logging
-from sqlalchemy.orm import Session
-from polar_sdk import Polar
-from polar_sdk.models import (
-    CheckoutCreate,
-    CheckoutPublic,
-    Customer,
-    Subscription
-)
+"""Payment processing service using Polar.sh."""
 
-from app.core.config import settings
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from app.services.base import BaseService, ExternalService
 from app.models import User
-from app.db.database import get_db
+from app.core.config import settings
+from app.core.exceptions import PaymentError, ConfigurationError
+import logging
+
+try:
+    from polar_sdk import Polar
+    from polar_sdk.models import CheckoutCreate, CheckoutPublic
+except ImportError:
+    Polar = None
+    CheckoutCreate = None
+    CheckoutPublic = None
 
 logger = logging.getLogger(__name__)
 
-class PolarService:
-    """Service for handling Polar.sh payment operations"""
+
+class PolarClient(ExternalService):
+    """Client for Polar.sh payment processing."""
     
     def __init__(self):
+        super().__init__("Polar", "https://api.polar.sh")
+        
+        if not Polar:
+            raise ConfigurationError("Polar SDK not installed", "polar_sdk")
+        
         if not settings.polar_access_token:
-            raise ValueError("Polar access token not configured")
+            raise ConfigurationError("Polar access token not configured", "polar_access_token")
         
         self.client = Polar(access_token=settings.polar_access_token)
-        self.organization_id = settings.polar_organization_id
-    
-    async def get_or_create_customer(self, user: User) -> Optional[Customer]:
-        """Get existing customer or create new one for user"""
-        try:
-            # First try to find existing customer by email
-            customers_response = self.client.customers.list(
-                organization_id=self.organization_id,
-                email=user.email
-            )
-            
-            if customers_response.result and len(customers_response.result) > 0:
-                customer = customers_response.result[0]
-                # Update user with customer ID if not set
-                if not user.polar_customer_id:
-                    user.polar_customer_id = customer.id
-                return customer
-            
-            # Create new customer
-            customer_data = {
-                "email": user.email,
-                "name": user.email,  # Use email as name if no name provided
-                "organization_id": self.organization_id
-            }
-            
-            customer = self.client.customers.create(**customer_data)
-            
-            # Update user with new customer ID
-            user.polar_customer_id = customer.id
-            
-            return customer
-            
-        except Exception as e:
-            logger.error(f"Failed to get/create customer: {e}")
-            return None
     
     async def create_checkout_session(
-        self,
-        product_ids: List[str],
-        user: User,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[CheckoutPublic]:
-        """Create a checkout session for products"""
+        self, 
+        product_id: str, 
+        success_url: str,
+        customer_email: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
+        """Create a checkout session."""
         try:
-            customer = await asyncio.to_thread(self.get_or_create_customer, user)
-            if not customer:
-                raise ValueError("Failed to create customer")
-            
-            # Use the new Polar SDK pattern
             checkout_data = CheckoutCreate(
-                products=product_ids,
-                success_url=settings.polar_success_url or "http://localhost:3000/success?checkout_id={CHECKOUT_ID}",
-                customer_id=customer.id,
+                product_id=product_id,
+                success_url=success_url,
+                customer_email=customer_email,
                 metadata=metadata or {}
             )
             
             checkout = self.client.checkouts.create(checkout_data)
             
-            return checkout
+            return {
+                "checkout_id": checkout.id,
+                "checkout_url": checkout.url,
+                "expires_at": checkout.expires_at
+            }
+        except Exception as e:
+            self._handle_external_error(e, "create_checkout_session")
+    
+    async def get_checkout_status(self, checkout_id: str) -> Dict[str, Any]:
+        """Get checkout session status."""
+        try:
+            checkout = self.client.checkouts.get(checkout_id)
             
+            return {
+                "id": checkout.id,
+                "status": checkout.status,
+                "product_id": checkout.product_id,
+                "customer_email": checkout.customer_email,
+                "amount": checkout.amount,
+                "currency": checkout.currency
+            }
         except Exception as e:
-            logger.error(f"Failed to create checkout session: {e}")
-            return None
+            self._handle_external_error(e, "get_checkout_status")
     
-    async def get_subscription(self, subscription_id: str) -> Optional[Subscription]:
-        """Get subscription details"""
+    async def get_subscription_status(self, subscription_id: str) -> Dict[str, Any]:
+        """Get subscription status."""
         try:
-            subscription = self.client.subscriptions.get(id=subscription_id)
-            return subscription
+            subscription = self.client.subscriptions.get(subscription_id)
+            
+            return {
+                "id": subscription.id,
+                "status": subscription.status,
+                "current_period_start": subscription.current_period_start,
+                "current_period_end": subscription.current_period_end,
+                "cancel_at_period_end": subscription.cancel_at_period_end
+            }
         except Exception as e:
-            logger.error(f"Failed to get subscription {subscription_id}: {e}")
-            return None
+            self._handle_external_error(e, "get_subscription_status")
+
+
+class PaymentService(BaseService):
+    """Service for handling payment operations."""
     
-    async def cancel_subscription(self, subscription_id: str) -> bool:
-        """Cancel a subscription"""
+    def __init__(self):
+        super().__init__()
         try:
-            self.client.subscriptions.cancel(id=subscription_id)
-            return True
+            self.polar_client = PolarClient()
+        except ConfigurationError as e:
+            self.logger.warning(f"Polar client not configured: {e.detail}")
+            self.polar_client = None
+    
+    def get_available_products(self) -> List[Dict[str, Any]]:
+        """Get available subscription products."""
+        products = []
+        
+        # Power User tier
+        if settings.polar_power_product_id:
+            products.append({
+                "id": settings.polar_power_product_id,
+                "name": "Power User",
+                "description": "Unlimited conversions, library, exports, and browser extension",
+                "price": 5,
+                "currency": "USD",
+                "interval": "month",
+                "tier": "power",
+                "features": [
+                    "Unlimited conversions",
+                    "Conversion library",
+                    "Advanced export (PDF, DOCX)",
+                    "Context templates",
+                    "Browser extension",
+                    "Priority conversion"
+                ]
+            })
+        
+        # Pro tier
+        if settings.polar_pro_product_id:
+            products.append({
+                "id": settings.polar_pro_product_id,
+                "name": "Pro",
+                "description": "AI integration, API access, and team features",
+                "price": 15,
+                "currency": "USD",
+                "interval": "month",
+                "tier": "pro",
+                "features": [
+                    "Everything in Power User",
+                    "MCP Server access",
+                    "API access",
+                    "Advanced context tools",
+                    "Team sharing",
+                    "Analytics dashboard",
+                    "Priority support"
+                ]
+            })
+        
+        # Enterprise tier
+        if settings.polar_enterprise_product_id:
+            products.append({
+                "id": settings.polar_enterprise_product_id,
+                "name": "Enterprise",
+                "description": "Self-hosted, custom features, and dedicated support",
+                "price": None,  # Custom pricing
+                "currency": "USD",
+                "interval": "custom",
+                "tier": "enterprise",
+                "features": [
+                    "Self-hosted MCP server",
+                    "Custom rate limits",
+                    "SSO integration",
+                    "Custom features",
+                    "SLA guarantees",
+                    "Dedicated support"
+                ],
+                "contact_required": True
+            })
+        
+        # If no products configured, show warning
+        if not products:
+            self.logger.warning("No Polar product IDs configured")
+            products.append({
+                "id": "configuration_required",
+                "name": "Configuration Required",
+                "description": "Polar product IDs need to be configured",
+                "price": 0,
+                "currency": "USD",
+                "interval": "month",
+                "tier": "free",
+                "features": ["Configuration required"],
+                "disabled": True
+            })
+        
+        return products
+    
+    async def create_checkout_session(
+        self, 
+        db: Session,
+        user_id: str, 
+        product_id: str
+    ) -> Dict[str, Any]:
+        """Create a payment checkout session."""
+        if not self.polar_client:
+            raise PaymentError("Payment system not configured")
+        
+        # Get user info
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise PaymentError("User not found")
+        
+        # Find product info
+        products = self.get_available_products()
+        product = next((p for p in products if p["id"] == product_id), None)
+        if not product:
+            raise PaymentError("Product not found")
+        
+        if product.get("disabled"):
+            raise PaymentError("Product not available")
+        
+        # Create checkout session
+        success_url = settings.polar_success_url or "http://localhost:5173/success?checkout_id={CHECKOUT_ID}"
+        success_url = success_url.replace("{CHECKOUT_ID}", "{checkout_id}")
+        
+        try:
+            checkout_data = await self.polar_client.create_checkout_session(
+                product_id=product_id,
+                success_url=success_url,
+                customer_email=user.email,
+                metadata={
+                    "user_id": str(user_id),
+                    "tier": product["tier"]
+                }
+            )
+            
+            self.logger.info(f"Checkout session created for user {user_id}: {checkout_data['checkout_id']}")
+            
+            return {
+                "checkout_url": checkout_data["checkout_url"],
+                "checkout_id": checkout_data["checkout_id"],
+                "product": product
+            }
         except Exception as e:
-            logger.error(f"Failed to cancel subscription {subscription_id}: {e}")
-            return False
+            self.logger.error(f"Failed to create checkout session: {str(e)}")
+            raise PaymentError("Failed to create checkout session")
     
-    async def handle_webhook_event(self, event_type: str, data: Dict[str, Any]) -> bool:
-        """Handle incoming webhook events from Polar"""
+    async def handle_webhook_event(self, db: Session, event_type: str, event_data: Dict[str, Any]) -> None:
+        """Handle Polar webhook events."""
+        self.logger.info(f"Processing webhook event: {event_type}")
+        
         try:
-            if event_type == "subscription.created":
-                return await self._handle_subscription_created(data)
+            if event_type == "checkout.completed":
+                await self._handle_checkout_completed(db, event_data)
+            elif event_type == "subscription.created":
+                await self._handle_subscription_created(db, event_data)
+            elif event_type == "subscription.cancelled":
+                await self._handle_subscription_cancelled(db, event_data)
             elif event_type == "subscription.updated":
-                return await self._handle_subscription_updated(data)
-            elif event_type == "subscription.canceled":
-                return await self._handle_subscription_canceled(data)
-            elif event_type == "order.created":
-                return await self._handle_order_created(data)
+                await self._handle_subscription_updated(db, event_data)
             else:
-                logger.warning(f"Unhandled webhook event type: {event_type}")
-                return True
-                
+                self.logger.warning(f"Unhandled webhook event type: {event_type}")
         except Exception as e:
-            logger.error(f"Failed to handle webhook event {event_type}: {e}")
-            return False
+            self.logger.error(f"Webhook processing failed: {str(e)}")
+            raise PaymentError(f"Webhook processing failed: {str(e)}")
     
-    async def _handle_subscription_created(self, data: Dict[str, Any]) -> bool:
-        """Handle subscription created webhook"""
-        try:
-            subscription_id = data.get("id")
-            customer_id = data.get("customer_id")
-            
-            # Find user by customer ID
-            db = next(get_db())
-            user = db.query(User).filter(User.polar_customer_id == customer_id).first()
-            
-            if user:
-                user.polar_subscription_id = subscription_id
-                user.tier = self._get_tier_from_product(data.get("product"))
-                user.subscription_ends_at = self._parse_subscription_end_date(data)
-                db.commit()
-                
-                logger.info(f"Updated user {user.id} with subscription {subscription_id}")
-                return True
-            else:
-                logger.warning(f"User not found for customer {customer_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error handling subscription created: {e}")
-            return False
-    
-    async def _handle_subscription_updated(self, data: Dict[str, Any]) -> bool:
-        """Handle subscription updated webhook"""
-        try:
-            subscription_id = data.get("id")
-            
-            # Find user by subscription ID
-            db = next(get_db())
-            user = db.query(User).filter(User.polar_subscription_id == subscription_id).first()
-            
-            if user:
-                # Update subscription end date and status
-                user.subscription_ends_at = self._parse_subscription_end_date(data)
-                
-                # Update tier if product changed
-                new_tier = self._get_tier_from_product(data.get("product"))
-                if new_tier:
-                    user.tier = new_tier
-                
-                db.commit()
-                
-                logger.info(f"Updated subscription {subscription_id} for user {user.id}")
-                return True
-            else:
-                logger.warning(f"User not found for subscription {subscription_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error handling subscription updated: {e}")
-            return False
-    
-    async def _handle_subscription_canceled(self, data: Dict[str, Any]) -> bool:
-        """Handle subscription canceled webhook"""
-        try:
-            subscription_id = data.get("id")
-            
-            # Find user by subscription ID
-            db = next(get_db())
-            user = db.query(User).filter(User.polar_subscription_id == subscription_id).first()
-            
-            if user:
-                # Keep subscription end date but mark as canceled
-                # User keeps access until the end of their billing period
-                user.polar_subscription_id = None
-                db.commit()
-                
-                logger.info(f"Canceled subscription {subscription_id} for user {user.id}")
-                return True
-            else:
-                logger.warning(f"User not found for subscription {subscription_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error handling subscription canceled: {e}")
-            return False
-    
-    async def _handle_order_created(self, data: Dict[str, Any]) -> bool:
-        """Handle one-time order created webhook"""
-        try:
-            customer_id = data.get("customer_id")
-            
-            # Find user by customer ID
-            db = next(get_db())
-            user = db.query(User).filter(User.polar_customer_id == customer_id).first()
-            
-            if user:
-                # Handle one-time purchase (could be tier upgrade, etc.)
-                tier = self._get_tier_from_product(data.get("product"))
-                if tier:
-                    user.tier = tier
-                    # For one-time purchases, set end date based on product
-                    if tier == "power":
-                        user.subscription_ends_at = datetime.utcnow() + timedelta(days=365)
-                    
-                db.commit()
-                
-                logger.info(f"Processed order for user {user.id}")
-                return True
-            else:
-                logger.warning(f"User not found for customer {customer_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error handling order created: {e}")
-            return False
-    
-    def _get_tier_from_product(self, product_data: Dict[str, Any]) -> Optional[str]:
-        """Extract tier from product data"""
-        if not product_data:
-            return None
+    async def _handle_checkout_completed(self, db: Session, event_data: Dict[str, Any]) -> None:
+        """Handle completed checkout."""
+        checkout_id = event_data.get("id")
+        user_id = event_data.get("metadata", {}).get("user_id")
+        tier = event_data.get("metadata", {}).get("tier")
         
-        product_name = product_data.get("name", "").lower()
+        if not user_id or not tier:
+            self.logger.error(f"Missing user_id or tier in checkout metadata: {checkout_id}")
+            return
         
-        if "power" in product_name:
-            return "power"
-        elif "pro" in product_name:
-            return "pro"
-        elif "enterprise" in product_name:
-            return "enterprise"
-        
-        return None
+        # Update user tier
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.tier = tier
+            user.polar_customer_id = event_data.get("customer_id")
+            db.commit()
+            
+            self.logger.info(f"User {user_id} upgraded to {tier} tier")
     
-    def _parse_subscription_end_date(self, data: Dict[str, Any]) -> Optional[datetime]:
-        """Parse subscription end date from webhook data"""
-        try:
-            # Look for current period end or next billing date
-            end_date_str = data.get("current_period_end") or data.get("ends_at")
+    async def _handle_subscription_created(self, db: Session, event_data: Dict[str, Any]) -> None:
+        """Handle subscription creation."""
+        customer_id = event_data.get("customer_id")
+        subscription_id = event_data.get("id")
+        
+        user = db.query(User).filter(User.polar_customer_id == customer_id).first()
+        if user:
+            user.polar_subscription_id = subscription_id
+            user.subscription_ends_at = datetime.fromisoformat(
+                event_data.get("current_period_end", "")
+            )
+            db.commit()
             
-            if end_date_str:
-                return datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+            self.logger.info(f"Subscription created for user {user.id}: {subscription_id}")
+    
+    async def _handle_subscription_cancelled(self, db: Session, event_data: Dict[str, Any]) -> None:
+        """Handle subscription cancellation."""
+        subscription_id = event_data.get("id")
+        
+        user = db.query(User).filter(User.polar_subscription_id == subscription_id).first()
+        if user:
+            # Downgrade to free tier at period end
+            cancel_at = datetime.fromisoformat(event_data.get("cancel_at", ""))
+            user.subscription_ends_at = cancel_at
+            db.commit()
             
-            return None
-        except Exception as e:
-            logger.error(f"Failed to parse subscription end date: {e}")
-            return None
-
-# Global service instance - will be None if not properly configured
-polar_service = None
-
-def get_polar_service() -> Optional[PolarService]:
-    """Get configured Polar service instance"""
-    global polar_service
-    if polar_service is None:
-        try:
-            polar_service = PolarService()
-        except ValueError as e:
-            logger.warning(f"Polar service not configured: {e}")
-            return None
-    return polar_service
+            self.logger.info(f"Subscription cancelled for user {user.id}: {subscription_id}")
+    
+    async def _handle_subscription_updated(self, db: Session, event_data: Dict[str, Any]) -> None:
+        """Handle subscription updates."""
+        subscription_id = event_data.get("id")
+        
+        user = db.query(User).filter(User.polar_subscription_id == subscription_id).first()
+        if user:
+            user.subscription_ends_at = datetime.fromisoformat(
+                event_data.get("current_period_end", "")
+            )
+            db.commit()
+            
+            self.logger.info(f"Subscription updated for user {user.id}: {subscription_id}")

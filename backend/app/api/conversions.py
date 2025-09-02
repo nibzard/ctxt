@@ -11,7 +11,15 @@ from app.schemas import (
     ConversionResponse
 )
 from app.services.conversion import conversion_service
+from app.services.rate_limiter import rate_limiter
 from app.core.auth import get_current_active_user
+from app.core.exceptions import (
+    ConversionError, 
+    RateLimitError, 
+    ValidationError,
+    ResourceNotFoundError
+)
+from app.core.validators import URLValidator, validate_pagination
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,11 +28,22 @@ router = APIRouter()
 @router.post("/convert")
 async def convert_url(
     request: ConversionRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_active_user)
 ):
     """Convert a URL to markdown format"""
     try:
-        # TODO: Add rate limiting based on user tier
+        # Check rate limiting based on user tier
+        rate_info = rate_limiter.check_rate_limit(db, current_user)
+        
+        if not rate_info["allowed"]:
+            # Add rate limit headers
+            headers = rate_limiter.get_rate_limit_headers(rate_info)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Rate limit exceeded. You've used {rate_info['current_usage']}/{rate_info['daily_limit']} conversions today. Limit resets at {rate_info['reset_time']}",
+                headers=headers
+            )
         
         # Convert URL using service
         conversion_data = await conversion_service.convert_url(
@@ -58,6 +77,14 @@ async def convert_url(
         
         logger.info(f"Converted URL successfully: {request.url} -> {slug}")
         
+        # Add rate limit headers to response
+        # Note: In FastAPI, headers need to be added via Response object
+        # For now, we'll include rate info in response metadata
+        response_data = {
+            **conversion.__dict__,
+            "_rate_limit": rate_info
+        }
+        
         return conversion
         
     except Exception as e:
@@ -87,7 +114,10 @@ async def save_conversion(
     conversion.user_id = current_user.id
     conversion.is_public = save_data.make_public
     
-    # TODO: Process tags if provided
+    # Process tags if provided
+    if save_data.tags:
+        # Convert tags to topics array for storage
+        conversion.topics = save_data.tags
     
     db.commit()
     
@@ -109,9 +139,11 @@ async def list_conversions(
     query = db.query(Conversion).filter(Conversion.user_id == current_user.id)
     
     if search:
+        # Use parameterized query to prevent SQL injection
+        search_pattern = f"%{search}%"
         query = query.filter(
-            Conversion.title.ilike(f"%{search}%") |
-            Conversion.content.ilike(f"%{search}%")
+            Conversion.title.ilike(search_pattern) |
+            Conversion.content.ilike(search_pattern)
         )
     
     total = query.count()
