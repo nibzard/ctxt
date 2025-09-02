@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from typing import List, Optional
+from datetime import datetime, timezone, timedelta
 from app.db.database import get_db
 from app.models import Conversion, User
 from app.schemas import (
@@ -31,6 +32,44 @@ router = APIRouter()
 async def test_endpoint():
     """Simple test endpoint"""
     return {"message": "Test endpoint works"}
+
+@router.get("/cache/check")
+async def check_conversion_cache(
+    url: str,
+    db: Session = Depends(get_db)
+):
+    """Check if a URL has been converted recently (within 48 hours)"""
+    try:
+        # Calculate 48 hours ago
+        cache_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        
+        # Look for existing conversion
+        existing_conversion = db.query(Conversion).filter(
+            Conversion.source_url == url,
+            Conversion.created_at >= cache_cutoff
+        ).order_by(Conversion.created_at.desc()).first()
+        
+        if existing_conversion:
+            logger.info(f"Found cached conversion for URL: {url} (created: {existing_conversion.created_at})")
+            return {
+                "cached": True,
+                "conversion": existing_conversion,
+                "cache_age_hours": int((datetime.now(timezone.utc) - existing_conversion.created_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600)
+            }
+        else:
+            logger.info(f"No recent cache found for URL: {url}")
+            return {
+                "cached": False,
+                "conversion": None,
+                "cache_age_hours": None
+            }
+            
+    except Exception as e:
+        logger.error(f"Error checking cache for URL {url}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Cache check failed: {str(e)}"
+        )
 
 @router.post("/convert")
 async def convert_url(
@@ -105,17 +144,18 @@ async def create_conversion(
     request: ConversionCreateFromClient,
     db: Session = Depends(get_db)
 ):
-    """Create a new conversion from client-side processed data"""
+    """Create a new conversion from client-side processed data or update existing cached version"""
     try:
-        # Generate slug
         import uuid
         import re
         from urllib.parse import urlparse
-        from datetime import datetime
         
-        # Use the conversion service to generate proper slug
-        slug_base = conversion_service.generate_slug(request.source_url, request.title)
-        slug = conversion_service.ensure_unique_slug(db, slug_base)
+        # Check if we have an existing conversion for this URL within 48 hours
+        cache_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        existing_conversion = db.query(Conversion).filter(
+            Conversion.source_url == request.source_url,
+            Conversion.created_at >= cache_cutoff
+        ).order_by(Conversion.created_at.desc()).first()
         
         # Calculate word count and reading time
         word_count = len(request.content.split()) if request.content else 0
@@ -124,34 +164,52 @@ async def create_conversion(
         # Extract domain
         domain = urlparse(request.source_url).netloc.replace('www.', '')
         
-        # Create conversion object and save to database
-        conversion = Conversion(
-            id=uuid.uuid4(),
-            slug=slug,
-            source_url=request.source_url,
-            title=request.title,
-            domain=domain,
-            content=request.content,
-            meta_description=request.meta_description,
-            word_count=word_count,
-            reading_time=reading_time,
-            is_public=True,
-            view_count=0
-        )
-        
-        db.add(conversion)
-        db.commit()
-        db.refresh(conversion)
-        
-        logger.info(f"Created conversion successfully: {request.source_url} -> {slug}")
-        
-        return conversion
+        if existing_conversion:
+            # Update existing conversion with fresh content
+            existing_conversion.title = request.title
+            existing_conversion.content = request.content
+            existing_conversion.meta_description = request.meta_description
+            existing_conversion.word_count = word_count
+            existing_conversion.reading_time = reading_time
+            existing_conversion.domain = domain
+            existing_conversion.updated_at = func.now()
+            
+            db.commit()
+            db.refresh(existing_conversion)
+            
+            logger.info(f"Updated cached conversion: {request.source_url} -> {existing_conversion.slug}")
+            return existing_conversion
+        else:
+            # Create new conversion
+            slug_base = conversion_service.generate_slug(request.source_url, request.title)
+            slug = conversion_service.ensure_unique_slug(db, slug_base)
+            
+            conversion = Conversion(
+                id=uuid.uuid4(),
+                slug=slug,
+                source_url=request.source_url,
+                title=request.title,
+                domain=domain,
+                content=request.content,
+                meta_description=request.meta_description,
+                word_count=word_count,
+                reading_time=reading_time,
+                is_public=True,
+                view_count=0
+            )
+            
+            db.add(conversion)
+            db.commit()
+            db.refresh(conversion)
+            
+            logger.info(f"Created new conversion: {request.source_url} -> {slug}")
+            return conversion
         
     except Exception as e:
-        logger.error(f"Error creating conversion: {str(e)}")
+        logger.error(f"Error creating/updating conversion: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to create conversion: {str(e)}"
+            detail=f"Failed to create/update conversion: {str(e)}"
         )
 
 @router.post("/conversions/{conversion_id}/save", response_model=ConversionResponse)
