@@ -11,6 +11,8 @@ interface UseConversionState {
   conversion: Conversion | null;
   loading: boolean;
   error: string | null;
+  isFromCache: boolean;
+  cacheAgeHours: number | null;
 }
 
 interface UseConversionActions {
@@ -38,13 +40,30 @@ export function useConversion(): UseConversionState & UseConversionActions {
     conversion: null,
     loading: false,
     error: null,
+    isFromCache: false,
+    cacheAgeHours: null,
   });
 
   const convertUrl = useCallback(async (request: ConversionRequest) => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
+    setState(prev => ({ ...prev, loading: true, error: null, isFromCache: false, cacheAgeHours: null }));
     
     try {
-      // Step 1: Call Jina Reader API directly from client-side
+      // Step 1: Check cache first
+      const cacheResult = await apiService.checkConversionCache(request.url);
+      
+      if (cacheResult.cached && cacheResult.conversion) {
+        // Use cached version
+        setState(prev => ({ 
+          ...prev, 
+          conversion: cacheResult.conversion!, 
+          loading: false, 
+          isFromCache: true, 
+          cacheAgeHours: cacheResult.cache_age_hours || 0 
+        }));
+        return;
+      }
+      
+      // Step 2: No cache, call Jina Reader API directly from client-side
       const jinaUrl = `https://r.jina.ai/${encodeURIComponent(request.url)}`;
       const jinaResponse = await fetch(jinaUrl, {
         method: 'GET',
@@ -64,7 +83,7 @@ export function useConversion(): UseConversionState & UseConversionActions {
         throw new Error(`Jina Reader failed with code: ${jinaData.code}`);
       }
 
-      // Step 2: Send processed markdown to our backend for database storage
+      // Step 3: Send processed markdown to our backend for database storage
       const conversion = await apiService.saveConversion({
         source_url: request.url,
         title: jinaData.data.title,
@@ -73,12 +92,20 @@ export function useConversion(): UseConversionState & UseConversionActions {
         options: request.options
       });
       
-      setState(prev => ({ ...prev, conversion, loading: false }));
+      setState(prev => ({ 
+        ...prev, 
+        conversion, 
+        loading: false, 
+        isFromCache: false, 
+        cacheAgeHours: null 
+      }));
     } catch (error) {
       setState(prev => ({ 
         ...prev, 
         loading: false, 
-        error: apiService.handleError(error) 
+        error: apiService.handleError(error),
+        isFromCache: false,
+        cacheAgeHours: null
       }));
     }
   }, []);
@@ -92,6 +119,8 @@ export function useConversion(): UseConversionState & UseConversionActions {
       conversion: null,
       loading: false,
       error: null,
+      isFromCache: false,
+      cacheAgeHours: null,
     });
   }, []);
 

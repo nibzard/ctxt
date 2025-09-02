@@ -3,7 +3,7 @@
 
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import { 
@@ -33,7 +33,7 @@ interface SortableItemProps {
   onMove: (sourceIndex: number, targetIndex: number) => void;
 }
 
-export const SortableItem: React.FC<SortableItemProps> = ({
+const SortableItemComponent: React.FC<SortableItemProps> = ({
   id,
   block,
   index,
@@ -79,39 +79,55 @@ export const SortableItem: React.FC<SortableItemProps> = ({
     );
   }, [id, index, onMove]);
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     onUpdate(id, {
       content: editContent,
       title: block.type === 'url' ? editTitle : undefined,
     });
     setIsEditing(false);
-  };
+  }, [id, editContent, editTitle, block.type, onUpdate]);
 
-  const handleCancel = () => {
+  const handleCancel = useCallback(() => {
     setEditContent(block.content);
     setEditTitle(block.title || '');
     setIsEditing(false);
-  };
+  }, [block.content, block.title]);
 
-  const truncateContent = (content: string, maxLength = 150) => {
+  const handleRemove = useCallback(() => {
+    onRemove(id);
+  }, [id, onRemove]);
+
+  const handleEdit = useCallback(() => {
+    setIsEditing(true);
+  }, []);
+
+  const truncateContent = useCallback((content: string, maxLength = 150) => {
     if (content.length <= maxLength) return content;
     return content.slice(0, maxLength) + '...';
-  };
+  }, []);
 
   return (
     <div
       ref={elementRef}
-      className={`bg-white border border-gray-200 rounded-lg p-4 shadow-sm transition-all ${
-        isDragging ? 'opacity-50 rotate-1 scale-105' : ''
+      className={`bg-white border rounded-lg p-4 shadow-sm transition-all duration-200 ${
+        isDragging 
+          ? 'opacity-40 scale-95 shadow-lg border-blue-300 bg-blue-50' 
+          : 'border-gray-200 hover:border-gray-300 hover:shadow-md'
       } ${
-        isOver ? 'border-blue-400 shadow-md' : ''
+        isOver 
+          ? 'border-blue-500 shadow-lg bg-blue-50 scale-[1.02] ring-2 ring-blue-200' 
+          : ''
       }`}
     >
       <div className="flex items-start gap-3">
         {/* Drag Handle */}
         <button
           ref={dragHandleRef}
-          className="mt-1 text-gray-400 hover:text-gray-600 cursor-grab active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-blue-500 rounded p-1"
+          className={`mt-1 p-1 rounded transition-colors ${
+            isDragging 
+              ? 'text-blue-600 bg-blue-100' 
+              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+          } cursor-grab active:cursor-grabbing focus:outline-none focus:ring-2 focus:ring-blue-500`}
           title="Drag to reorder"
         >
           <GripVertical className="w-5 h-5" />
@@ -212,14 +228,14 @@ export const SortableItem: React.FC<SortableItemProps> = ({
         {!isEditing && (
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setIsEditing(true)}
+              onClick={handleEdit}
               className="p-1 text-gray-400 hover:text-blue-600 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
               title="Edit"
             >
               <Edit2 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => onRemove(id)}
+              onClick={handleRemove}
               className="p-1 text-gray-400 hover:text-red-600 rounded focus:outline-none focus:ring-2 focus:ring-red-500"
               title="Remove"
             >
@@ -231,3 +247,14 @@ export const SortableItem: React.FC<SortableItemProps> = ({
     </div>
   );
 };
+
+// Memoize the component to prevent unnecessary re-renders
+export const SortableItem = memo(SortableItemComponent, (prevProps, nextProps) => {
+  return (
+    prevProps.id === nextProps.id &&
+    prevProps.index === nextProps.index &&
+    prevProps.block.content === nextProps.block.content &&
+    prevProps.block.title === nextProps.block.title &&
+    prevProps.block.order === nextProps.block.order
+  );
+});

@@ -99,6 +99,18 @@ class ApiService {
     await this.api.delete(`/api/conversions/${id}`);
   }
 
+  // Check if URL has cached conversion (within 48 hours)
+  async checkConversionCache(url: string): Promise<{
+    cached: boolean;
+    conversion?: Conversion;
+    cache_age_hours?: number;
+  }> {
+    const response = await this.api.get('/api/cache/check', {
+      params: { url }
+    });
+    return response.data;
+  }
+
   // Copy content to clipboard
   async copyToClipboard(content: string): Promise<boolean> {
     try {
@@ -116,16 +128,20 @@ class ApiService {
     }
   }
 
-  // Generate ChatGPT link
-  generateChatGPTLink(content: string): string {
-    const encodedContent = encodeURIComponent(content);
-    return `https://chatgpt.com/?q=${encodedContent}`;
+  // Generate ChatGPT link with permalink
+  generateChatGPTLink(slug: string): string {
+    const permalink = this.getSEOPageUrl(slug);
+    const prompt = `Read the context at: ${permalink}`;
+    const encodedPrompt = encodeURIComponent(prompt);
+    return `https://chatgpt.com/?q=${encodedPrompt}`;
   }
 
-  // Generate Claude link
-  generateClaudeLink(content: string): string {
-    const encodedContent = encodeURIComponent(content);
-    return `https://claude.ai/new?q=${encodedContent}`;
+  // Generate Claude link with permalink
+  generateClaudeLink(slug: string): string {
+    const permalink = this.getSEOPageUrl(slug);
+    const prompt = `Read the context at: ${permalink}`;
+    const encodedPrompt = encodeURIComponent(prompt);
+    return `https://claude.ai/new?q=${encodedPrompt}`;
   }
 
   // Validate URL

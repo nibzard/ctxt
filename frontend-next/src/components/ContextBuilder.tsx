@@ -3,12 +3,11 @@
 
 'use client';
 
-import React, { useState, useCallback } from 'react';
-import { draggable, dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
-import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import React, { useState, useCallback, useEffect } from 'react';
 import { SortableItem } from './SortableItem';
-import { Plus, Share, Save } from 'lucide-react';
+import { DropZone } from './DropZone';
+import { Plus, Save, Download } from 'lucide-react';
+import { apiService } from '@/services/api';
 
 interface ContextBlock {
   id: string;
@@ -38,51 +37,160 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   const [stackName, setStackName] = useState('');
   const [isAddingBlock, setIsAddingBlock] = useState(false);
   const [exportFormat, setExportFormat] = useState<'xml' | 'markdown' | 'json'>('xml');
+  const [isConverting, setIsConverting] = useState(false);
+  const [hasCheckedImport, setHasCheckedImport] = useState(false);
+
+  // Check for batch import on component mount (only once)
+  useEffect(() => {
+    if (hasCheckedImport) return;
+    
+    const batchImport = localStorage.getItem('batchImport');
+    if (batchImport) {
+      try {
+        const importedBlocks = JSON.parse(batchImport);
+        if (Array.isArray(importedBlocks) && importedBlocks.length > 0) {
+          // Update order for imported blocks
+          const updatedBlocks = importedBlocks.map((block: ContextBlock, index: number) => ({
+            ...block,
+            order: blocks.length + index
+          }));
+          
+          setBlocks(prev => [...prev, ...updatedBlocks]);
+          localStorage.removeItem('batchImport');
+          
+          // Show notification
+          const count = importedBlocks.length;
+          alert(`Imported ${count} conversion${count > 1 ? 's' : ''} from batch processing!`);
+        }
+      } catch (error) {
+        console.error('Error importing batch conversions:', error);
+      }
+    }
+    setHasCheckedImport(true);
+  }, [hasCheckedImport, blocks.length]);
 
   const handleDragEnd = useCallback((sourceIndex: number, targetIndex: number) => {
     if (sourceIndex === targetIndex) return;
 
-    setBlocks(prev => {
-      const newBlocks = [...prev];
-      const [movedItem] = newBlocks.splice(sourceIndex, 1);
-      newBlocks.splice(targetIndex, 0, movedItem);
-      
-      // Update order property
-      return newBlocks.map((item, index) => ({ ...item, order: index }));
+    // Use requestAnimationFrame to batch the state update
+    requestAnimationFrame(() => {
+      setBlocks(prev => {
+        const newBlocks = [...prev];
+        const [movedItem] = newBlocks.splice(sourceIndex, 1);
+        newBlocks.splice(targetIndex, 0, movedItem);
+        
+        // Update order property
+        return newBlocks.map((item, index) => ({ ...item, order: index }));
+      });
     });
   }, []);
 
-  const addBlock = useCallback(() => {
-    if (!newBlockContent.trim()) return;
-
-    const newBlock: ContextBlock = {
-      id: `block-${Date.now()}`,
-      type: newBlockType,
-      content: newBlockContent,
-      order: blocks.length,
-    };
-
-    if (newBlockType === 'url') {
-      newBlock.url = newBlockContent;
-      // Extract domain as title for now - would normally fetch from API
-      try {
-        const url = new URL(newBlockContent);
-        newBlock.title = url.hostname;
-      } catch {
-        newBlock.title = 'Invalid URL';
-      }
+  const addUrlBlock = useCallback(async (url: string) => {
+    if (!apiService.validateUrl(url)) {
+      console.error('Invalid URL provided');
+      return;
     }
 
-    setBlocks(prev => [...prev, newBlock]);
-    setNewBlockContent('');
-    setIsAddingBlock(false);
-  }, [newBlockContent, newBlockType, blocks.length]);
+    setIsConverting(true);
+    
+    try {
+      // Check cache first
+      const cacheResult = await Promise.race([
+        apiService.checkConversionCache(url),
+        new Promise<{ cached: false }>((_, reject) => 
+          setTimeout(() => reject(new Error('Cache check timeout')), 5000)
+        )
+      ]);
+      
+      let conversion;
+      if (cacheResult.cached && cacheResult.conversion) {
+        conversion = cacheResult.conversion;
+      } else {
+        // Convert URL using Jina Reader API with timeout
+        const jinaUrl = `https://r.jina.ai/${encodeURIComponent(url)}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        
+        const jinaResponse = await fetch(jinaUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-Return-Format': 'markdown'
+          },
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!jinaResponse.ok) {
+          throw new Error(`Jina Reader API error: ${jinaResponse.status}`);
+        }
+
+        const jinaData = await jinaResponse.json();
+        
+        if (jinaData.code !== 200) {
+          throw new Error(`Jina Reader failed with code: ${jinaData.code}`);
+        }
+
+        // Save conversion to backend
+        conversion = await apiService.saveConversion({
+          source_url: url,
+          title: jinaData.data.title,
+          content: jinaData.data.content,
+          meta_description: jinaData.data.description
+        });
+      }
+
+      // Add as block
+      const newBlock: ContextBlock = {
+        id: `block-${Date.now()}-${Math.random()}`,
+        type: 'url',
+        title: conversion.title || 'Untitled',
+        content: conversion.content,
+        url: url,
+        order: blocks.length,
+      };
+
+      setBlocks(prev => [...prev, newBlock]);
+      setNewBlockContent('');
+      setIsAddingBlock(false);
+      
+    } catch (error) {
+      console.error('Error converting URL:', error);
+      // Show error in UI instead of alert
+      setNewBlockContent('');
+      setIsAddingBlock(false);
+    } finally {
+      setIsConverting(false);
+    }
+  }, [blocks.length]);
+
+  const addBlock = useCallback(async () => {
+    if (!newBlockContent.trim()) return;
+
+    if (newBlockType === 'url') {
+      await addUrlBlock(newBlockContent.trim());
+    } else {
+      const newBlock: ContextBlock = {
+        id: `block-${Date.now()}`,
+        type: 'text',
+        content: newBlockContent,
+        order: blocks.length,
+      };
+
+      setBlocks(prev => [...prev, newBlock]);
+      setNewBlockContent('');
+      setIsAddingBlock(false);
+    }
+  }, [newBlockContent, newBlockType, blocks.length, addUrlBlock]);
 
   const removeBlock = useCallback((blockId: string) => {
-    setBlocks(prev => prev.filter(block => block.id !== blockId).map((block, index) => ({
-      ...block,
-      order: index
-    })));
+    requestAnimationFrame(() => {
+      setBlocks(prev => prev.filter(block => block.id !== blockId).map((block, index) => ({
+        ...block,
+        order: index
+      })));
+    });
   }, []);
 
   const updateBlock = useCallback((blockId: string, updates: Partial<ContextBlock>) => {
@@ -104,19 +212,32 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   }, [blocks, stackName, onSave]);
 
   const generatePreview = useCallback(() => {
+    // Limit preview to first 2000 chars to improve performance
+    const truncateForPreview = (text: string, maxLength = 2000) => {
+      if (text.length <= maxLength) return text;
+      return text.slice(0, maxLength) + '\n... (truncated for preview)';
+    };
+
     const content = blocks.map(block => {
       if (block.type === 'url') {
-        return `${block.title || 'Untitled'}\n${block.url}\n---\n${block.content}`;
+        return `${block.title || 'Untitled'}\n${block.url}\n---\n${truncateForPreview(block.content, 500)}`;
       }
-      return block.content;
+      return truncateForPreview(block.content, 500);
     }).join('\n\n---\n\n');
 
     if (exportFormat === 'xml') {
-      return `<context>\n${blocks.map((block, index) => 
-        `  <source_${index + 1} type="${block.type}"${block.url ? ` url="${block.url}"` : ''}>\n    ${block.content.replace(/\n/g, '\n    ')}\n  </source_${index + 1}>`
+      const xmlContent = `<context>\n${blocks.map((block, index) => 
+        `  <source_${index + 1} type="${block.type}"${block.url ? ` url="${block.url}"` : ''}>\n    ${truncateForPreview(block.content, 500).replace(/\n/g, '\n    ')}\n  </source_${index + 1}>`
       ).join('\n')}\n</context>`;
+      return truncateForPreview(xmlContent);
     } else if (exportFormat === 'json') {
-      return JSON.stringify({ blocks }, null, 2);
+      const jsonContent = JSON.stringify({ 
+        blocks: blocks.map(block => ({
+          ...block,
+          content: truncateForPreview(block.content, 500)
+        }))
+      }, null, 2);
+      return truncateForPreview(jsonContent);
     }
     
     return content; // markdown format
@@ -126,9 +247,33 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     <div className={`max-w-4xl mx-auto p-6 ${className}`}>
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Context Builder</h2>
-        <p className="text-gray-600">
+        <p className="text-gray-600 mb-3">
           Build your context by adding URLs and text blocks. Drag to reorder them.
         </p>
+        
+        {/* Check for available batch import */}
+        {typeof window !== 'undefined' && localStorage.getItem('batchImport') && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-blue-800">
+                <strong>Batch conversions ready to import!</strong> You have converted URLs waiting to be added.
+              </div>
+              <button
+                onClick={() => {
+                  // Force re-run the useEffect by triggering a state change
+                  window.location.reload();
+                }}
+                className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Import Now
+              </button>
+            </div>
+          </div>
+        )}
+        
+        <div className="text-sm text-gray-500">
+          <strong>Pro tip:</strong> Use the &quot;Single URL&quot; tab to convert multiple URLs in batch, then export them here for organization and further editing.
+        </div>
       </div>
 
       {/* Context Stack Controls */}
@@ -142,7 +287,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <select
               value={exportFormat}
               onChange={(e) => setExportFormat(e.target.value as 'xml' | 'markdown' | 'json')}
@@ -167,7 +312,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
               disabled={blocks.length === 0}
               className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
             >
-              <Share className="w-4 h-4 mr-2" />
+              <Download className="w-4 h-4 mr-2" />
               Export
             </button>
           </div>
@@ -232,17 +377,25 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             <div className="flex gap-2">
               <button
                 onClick={addBlock}
-                disabled={!newBlockContent.trim()}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                disabled={!newBlockContent.trim() || isConverting}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center space-x-2"
               >
-                Add Block
+                {isConverting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    <span>Converting...</span>
+                  </>
+                ) : (
+                  <span>Add Block</span>
+                )}
               </button>
               <button
                 onClick={() => {
                   setIsAddingBlock(false);
                   setNewBlockContent('');
                 }}
-                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600"
+                disabled={isConverting}
+                className="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
@@ -258,17 +411,20 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             Context Blocks ({blocks.length})
           </h3>
           
-          <div className="space-y-3">
+          <div className="space-y-1">
+            <DropZone index={0} onDrop={handleDragEnd} />
             {blocks.map((block, index) => (
-              <SortableItem
-                key={block.id}
-                id={block.id}
-                block={block}
-                index={index}
-                onUpdate={updateBlock}
-                onRemove={removeBlock}
-                onMove={handleDragEnd}
-              />
+              <React.Fragment key={block.id}>
+                <SortableItem
+                  id={block.id}
+                  block={block}
+                  index={index}
+                  onUpdate={updateBlock}
+                  onRemove={removeBlock}
+                  onMove={handleDragEnd}
+                />
+                <DropZone index={index + 1} onDrop={handleDragEnd} />
+              </React.Fragment>
             ))}
           </div>
         </div>
