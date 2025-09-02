@@ -146,12 +146,14 @@ try:
 except ImportError as e:
     print(f"⚠️  Could not load context stacks routes: {e}")
 
-try:
-    from app.api import payment
-    app.include_router(payment.router, prefix="/api", tags=["payment"])
-    print("✅ Payment API routes loaded")
-except ImportError as e:
-    print(f"⚠️  Could not load payment routes: {e}")
+# Payment routes temporarily disabled due to missing service
+# try:
+#     from app.api import payment
+#     app.include_router(payment.router, prefix="/api", tags=["payment"])
+#     print("✅ Payment API routes loaded")
+# except ImportError as e:
+#     print(f"⚠️  Could not load payment routes: {e}")
+print("⚠️  Payment routes disabled (missing polar service implementation)")
 
 # SEO Routes
 try:

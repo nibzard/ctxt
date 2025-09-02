@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     
     # Database
-    database_url: str = os.getenv("DATABASE_URL", "postgresql://ctxt_user:ctxt_password@localhost:5432/ctxt_help")
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./ctxt_help.db")
     sql_debug: bool = False
     
     # Redis

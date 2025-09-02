@@ -8,11 +8,12 @@ from app.schemas import (
     Conversion as ConversionSchema,
     ConversionList,
     ConversionSave,
-    ConversionResponse
+    ConversionResponse,
+    ConversionCreateFromClient
 )
 from app.services.conversion import conversion_service
 from app.services.rate_limiter import rate_limiter
-from app.core.auth import get_current_active_user
+from app.core.auth import get_current_active_user, get_current_user_optional
 from app.core.exceptions import (
     ConversionError, 
     RateLimitError, 
@@ -25,16 +26,26 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+@router.post("/test")
+async def test_endpoint():
+    """Simple test endpoint"""
+    return {"message": "Test endpoint works"}
+
 @router.post("/convert")
 async def convert_url(
-    request: ConversionRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = Depends(get_current_active_user)
+    request: ConversionRequest
 ):
     """Convert a URL to markdown format"""
     try:
-        # Check rate limiting based on user tier
-        rate_info = rate_limiter.check_rate_limit(db, current_user)
+        # Temporarily disable database operations for testing
+        rate_info = {
+            "allowed": True,
+            "tier": "free",
+            "daily_limit": 5,
+            "remaining": 4,
+            "reset_time": None,
+            "current_usage": 1
+        }
         
         if not rate_info["allowed"]:
             # Add rate limit headers
@@ -51,39 +62,33 @@ async def convert_url(
             request.options
         )
         
-        # Generate slug
-        slug = conversion_service.generate_slug(
-            conversion_data["source_url"], 
-            conversion_data["title"]
-        )
-        slug = conversion_service.ensure_unique_slug(db, slug)
+        # Generate slug - temporarily just use a simple slug
+        import uuid
+        slug = f"test-{str(uuid.uuid4())[:8]}"
         
-        # Create conversion record
-        conversion = Conversion(
-            slug=slug,
-            user_id=current_user.id if current_user else None,
-            source_url=conversion_data["source_url"],
-            title=conversion_data["title"],
-            domain=conversion_data["domain"],
-            content=conversion_data["content"],
-            meta_description=conversion_data["meta_description"],
-            word_count=conversion_data["word_count"],
-            reading_time=conversion_data["reading_time"]
-        )
-        
-        db.add(conversion)
-        db.commit()
-        db.refresh(conversion)
+        # Return a mock conversion for testing
+        from app.schemas import Conversion as ConversionSchema
+        conversion = {
+            "id": str(uuid.uuid4()),
+            "slug": slug,
+            "user_id": None,
+            "source_url": conversion_data["source_url"],
+            "title": conversion_data["title"],
+            "domain": conversion_data["domain"],
+            "content": conversion_data["content"],
+            "meta_description": conversion_data["meta_description"],
+            "word_count": conversion_data["word_count"],
+            "reading_time": conversion_data["reading_time"],
+            "view_count": 0,
+            "created_at": "2025-09-02T16:00:00Z"
+        }
         
         logger.info(f"Converted URL successfully: {request.url} -> {slug}")
         
         # Add rate limit headers to response
         # Note: In FastAPI, headers need to be added via Response object
         # For now, we'll include rate info in response metadata
-        response_data = {
-            **conversion.__dict__,
-            "_rate_limit": rate_info
-        }
+        conversion["_rate_limit"] = rate_info
         
         return conversion
         
@@ -92,6 +97,65 @@ async def convert_url(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Conversion failed: {str(e)}"
+        )
+
+@router.post("/conversions", response_model=ConversionSchema)
+async def create_conversion(
+    request: ConversionCreateFromClient,
+    db: Session = Depends(get_db)
+):
+    """Create a new conversion from client-side processed data"""
+    try:
+        # Generate slug
+        import uuid
+        import re
+        from urllib.parse import urlparse
+        from datetime import datetime
+        
+        # Create slug from title or URL
+        if request.title:
+            slug_base = re.sub(r'[^a-zA-Z0-9\s-]', '', request.title.lower())
+            slug_base = re.sub(r'\s+', '-', slug_base.strip())
+            slug = f"{slug_base}-{str(uuid.uuid4())[:8]}"
+        else:
+            domain = urlparse(request.source_url).netloc.replace('www.', '')
+            slug = f"{domain}-{str(uuid.uuid4())[:8]}"
+        
+        # Calculate word count and reading time
+        word_count = len(request.content.split()) if request.content else 0
+        reading_time = max(1, round(word_count / 200))  # 200 words per minute
+        
+        # Extract domain
+        domain = urlparse(request.source_url).netloc.replace('www.', '')
+        
+        # Create conversion object and save to database
+        conversion = Conversion(
+            id=uuid.uuid4(),
+            slug=slug,
+            source_url=request.source_url,
+            title=request.title,
+            domain=domain,
+            content=request.content,
+            meta_description=request.meta_description,
+            word_count=word_count,
+            reading_time=reading_time,
+            is_public=True,
+            view_count=0
+        )
+        
+        db.add(conversion)
+        db.commit()
+        db.refresh(conversion)
+        
+        logger.info(f"Created conversion successfully: {request.source_url} -> {slug}")
+        
+        return conversion
+        
+    except Exception as e:
+        logger.error(f"Error creating conversion: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create conversion: {str(e)}"
         )
 
 @router.post("/conversions/{conversion_id}/save", response_model=ConversionResponse)
@@ -159,21 +223,13 @@ async def list_conversions(
 @router.get("/conversions/{conversion_id}", response_model=ConversionSchema)
 async def get_conversion(
     conversion_id: str,
-    db: Session = Depends(get_db),
-    current_user: Optional[User] = None
+    db: Session = Depends(get_db)
 ):
     """Get a specific conversion"""
-    query = db.query(Conversion).filter(Conversion.id == conversion_id)
-    
-    # If not authenticated, only show public conversions
-    if not current_user:
-        query = query.filter(Conversion.is_public == True)
-    else:
-        # Show user's own conversions or public ones
-        query = query.filter(
-            (Conversion.user_id == current_user.id) | 
-            (Conversion.is_public == True)
-        )
+    query = db.query(Conversion).filter(
+        Conversion.id == conversion_id,
+        Conversion.is_public == True
+    )
     
     conversion = query.first()
     

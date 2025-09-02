@@ -1,5 +1,7 @@
-from sqlalchemy import Column, String, Integer, DateTime, Boolean, Text, ARRAY, UUID, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, String, Integer, DateTime, Boolean, Text, UUID, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB, ARRAY
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+from sqlalchemy import JSON
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -53,7 +55,7 @@ class Conversion(Base):
     meta_description = Column(String(200), nullable=True)
     word_count = Column(Integer, nullable=True)
     reading_time = Column(Integer, nullable=True)  # in minutes
-    topics = Column(ARRAY(String), nullable=True)
+    topics = Column(JSON, nullable=True)  # Store as JSON array for SQLite compatibility
     
     # Settings
     is_public = Column(Boolean, default=True)
@@ -80,8 +82,8 @@ class ContextStack(Base):
     name = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     
-    # Content structure stored as JSONB
-    blocks = Column(JSONB, nullable=False)
+    # Content structure stored as JSON
+    blocks = Column(JSON, nullable=False)
     
     # Template settings
     is_template = Column(Boolean, default=False)
@@ -110,7 +112,7 @@ class ApiKey(Base):
     prefix = Column(String(10), nullable=False)  # First few chars for identification
     
     # Permissions and limits
-    scopes = Column(ARRAY(String), nullable=False, default=lambda: [])  # ['convert', 'library', 'context']
+    scopes = Column(JSON, nullable=False, default=lambda: [])  # ['convert', 'library', 'context']
     rate_limit_per_hour = Column(Integer, default=100)
     
     # Status

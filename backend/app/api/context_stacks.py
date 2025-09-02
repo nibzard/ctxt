@@ -203,14 +203,14 @@ async def export_context_stack(
             
         for i, block in enumerate(blocks):
             if block.get('type') == 'url':
-                content += f"\\n  <source_{i+1} url=\\"{block.get('url', '')}\\\" title=\\"{block.get('title', 'Untitled')}\\\">\\n    {block.get('content', '')}\\n  </source_{i+1}>"
+                content += f"\n  <source_{i+1} url=\"{block.get('url', '')}\" title=\"{block.get('title', 'Untitled')}\">\n    {block.get('content', '')}\n  </source_{i+1}>"
             else:
-                content += f"\\n  <text_{i+1}>\\n    {block.get('content', '')}\\n  </text_{i+1}>"
+                content += f"\n  <text_{i+1}>\n    {block.get('content', '')}\n  </text_{i+1}>"
         
         if export_options.custom_wrapper:
-            content += f"\\n</{export_options.custom_wrapper}>"
+            content += f"\n</{export_options.custom_wrapper}>"
         else:
-            content += "\\n</context>"
+            content += "\n</context>"
             
     elif export_options.format == "json":
         import json

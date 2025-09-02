@@ -27,16 +27,13 @@ async def get_seo_page(
     # Get user agent from request headers
     user_agent = request.headers.get("user-agent", "")
     
-    # Find conversion by slug
-    conversion = db.query(Conversion).filter(
-        Conversion.slug == slug,
-        Conversion.is_public == True  # Only serve public conversions
-    ).first()
+    # Query conversion from database
+    conversion = db.query(Conversion).filter(Conversion.slug == slug).first()
     
     if not conversion:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Page not found"
+            detail=f"Conversion with slug '{slug}' not found"
         )
     
     # Increment view count
@@ -339,7 +336,7 @@ async def serve_html_content(conversion: Conversion, request: Request) -> HTMLRe
             html = html.replace(/\\*(.*?)\\*/gim, '<em>$1</em>');
             
             // Convert links
-            html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2" class="text-blue-600 hover:underline" target="_blank" rel="noopener">$1</a>');
+            html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/gim, '<a href="$2" class="text-blue-600 hover:underline" target="_blank" rel="noopener">$1</a>');
             
             // Convert line breaks to paragraphs
             html = html.replace(/\n\n/gim, '</p><p>');

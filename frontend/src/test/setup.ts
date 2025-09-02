@@ -1,13 +1,20 @@
 import '@testing-library/jest-dom'
-import { beforeAll, afterEach } from 'vitest'
+import { afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
 
 // Mock IntersectionObserver
 global.IntersectionObserver = class IntersectionObserver {
+  root: Element | null = null;
+  rootMargin: string = '0px';
+  thresholds: ReadonlyArray<number> = [];
+  
   constructor() {}
   observe() {}
   disconnect() {}
   unobserve() {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
 }
 
 // Mock ResizeObserver

@@ -6,7 +6,7 @@ import type {
   ConversionList,
   ConversionSave,
   ConversionResponse,
-  ApiError
+  ConversionCreateRequest
 } from '../types/api';
 
 class ApiService {
@@ -46,7 +46,7 @@ class ApiService {
   }
 
   // Health check
-  async healthCheck(): Promise<any> {
+  async healthCheck(): Promise<Record<string, unknown>> {
     const response = await this.api.get('/health');
     return response.data;
   }
@@ -63,8 +63,14 @@ class ApiService {
     return response.data;
   }
 
-  // Save conversion to library
-  async saveConversion(id: string, data: ConversionSave): Promise<ConversionResponse> {
+  // Create new conversion from client-side processed data
+  async saveConversion(data: ConversionCreateRequest): Promise<Conversion> {
+    const response = await this.api.post<Conversion>('/api/conversions', data);
+    return response.data;
+  }
+
+  // Save existing conversion to library
+  async saveConversionToLibrary(id: string, data: ConversionSave): Promise<ConversionResponse> {
     const response = await this.api.post<ConversionResponse>(`/api/conversions/${id}/save`, data);
     return response.data;
   }
@@ -89,7 +95,7 @@ class ApiService {
     try {
       await navigator.clipboard.writeText(content);
       return true;
-    } catch (error) {
+    } catch {
       // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = content;
@@ -129,13 +135,22 @@ class ApiService {
   }
 
   // Handle API errors
-  handleError(error: any): string {
-    if (error.response?.data?.detail) {
-      return error.response.data.detail;
-    }
-    
-    if (error.message) {
-      return error.message;
+  handleError(error: unknown): string {
+    if (typeof error === 'object' && error !== null) {
+      const err = error as Record<string, unknown>;
+      if (err.response && typeof err.response === 'object' && err.response !== null) {
+        const response = err.response as Record<string, unknown>;
+        if (response.data && typeof response.data === 'object' && response.data !== null) {
+          const data = response.data as Record<string, unknown>;
+          if (typeof data.detail === 'string') {
+            return data.detail;
+          }
+        }
+      }
+      
+      if (typeof err.message === 'string') {
+        return err.message;
+      }
     }
     
     return 'An unexpected error occurred';

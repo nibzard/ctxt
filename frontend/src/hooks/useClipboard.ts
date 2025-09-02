@@ -9,7 +9,7 @@ export function useClipboard() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000); // Reset after 2 seconds
       return true;
-    } catch (error) {
+    } catch {
       // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = text;

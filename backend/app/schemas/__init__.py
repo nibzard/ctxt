@@ -63,6 +63,13 @@ class ConversionBase(BaseModel):
 class ConversionCreate(ConversionBase):
     pass
 
+class ConversionCreateFromClient(BaseModel):
+    source_url: str
+    title: str
+    content: str
+    meta_description: Optional[str] = None
+    options: Optional[ConversionOptions] = None
+
 class Conversion(ConversionBase):
     id: UUID
     slug: str

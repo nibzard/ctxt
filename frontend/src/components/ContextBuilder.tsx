@@ -212,7 +212,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
                   type="radio"
                   value="url"
                   checked={newBlockType === 'url'}
-                  onChange={(e) => setNewBlockType('url')}
+                  onChange={() => setNewBlockType('url')}
                   className="form-radio"
                 />
                 <span className="ml-2">URL</span>
@@ -222,7 +222,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
                   type="radio"
                   value="text"
                   checked={newBlockType === 'text'}
-                  onChange={(e) => setNewBlockType('text')}
+                  onChange={() => setNewBlockType('text')}
                   className="form-radio"
                 />
                 <span className="ml-2">Text</span>

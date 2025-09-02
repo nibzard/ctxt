@@ -37,6 +37,14 @@ export interface ConversionSave {
   tags?: string[];
 }
 
+export interface ConversionCreateRequest {
+  source_url: string;
+  title: string;
+  content: string;
+  meta_description?: string;
+  options?: ConversionOptions;
+}
+
 export interface ConversionList {
   items: Conversion[];
   total: number;
@@ -49,7 +57,7 @@ export interface ContextBlock {
   type: 'text' | 'conversion' | 'file';
   title: string;
   content: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   order: number;
 }
 

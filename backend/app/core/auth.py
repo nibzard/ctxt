@@ -4,6 +4,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Request
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.database import get_db
@@ -191,3 +192,25 @@ def create_tokens_for_user(user: User) -> dict:
         "refresh_token": refresh_token,
         "token_type": "bearer"
     }
+
+async def get_current_user_optional(
+    request: Request,
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """Get current user if authenticated, otherwise return None"""
+    try:
+        # Check for Authorization header
+        auth_header = request.headers.get("authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
+            
+        token = auth_header.split(" ")[1]
+        token_data = verify_token(token)
+        
+        user = db.query(User).filter(User.id == token_data.user_id).first()
+        if user and user.is_active:
+            return user
+    except:
+        pass
+    
+    return None

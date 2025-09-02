@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CreditCard, Check, X, AlertCircle } from 'lucide-react';
+import { CreditCard, Check, AlertCircle } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -26,7 +26,7 @@ const PricingCard: React.FC<PricingCardProps> = ({
   loading 
 }) => {
   const isPro = product.tier === 'pro';
-  const isPower = product.tier === 'power';
+  // const isPower = product.tier === 'power'; // Currently unused
 
   return (
     <div className={`relative rounded-lg border p-6 ${
@@ -96,8 +96,8 @@ interface PricingProps {
 }
 
 export const PricingSection: React.FC<PricingProps> = ({ 
-  currentTier = 'free',
-  onUpgrade
+  currentTier = 'free'
+  // onUpgrade // Currently unused
 }) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);

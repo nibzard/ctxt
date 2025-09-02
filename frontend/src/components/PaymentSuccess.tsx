@@ -6,10 +6,10 @@ export const PaymentSuccess: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error] = useState<string | null>(null);
   
   const tier = searchParams.get('tier');
-  const sessionId = searchParams.get('session_id');
+  // const sessionId = searchParams.get('session_id'); // Currently unused
 
   useEffect(() => {
     // Simulate verification delay

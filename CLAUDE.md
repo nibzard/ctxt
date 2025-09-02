@@ -164,6 +164,7 @@ DEBUG=true
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 - MCP Server: http://localhost:3001
+- **Tailscale Dev Backend**: http://100.126.153.59:8000 (for remote development access)
 
 ## Payment Integration
 
