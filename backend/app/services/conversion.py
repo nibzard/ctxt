@@ -73,12 +73,14 @@ class ConversionService:
             slug = re.sub(r'[^a-z0-9\s\-]', '', slug)
             slug = re.sub(r'\s+', '-', slug)
             slug = re.sub(r'-+', '-', slug)
-            slug = slug[:50].strip('-')
+            # Leave room for unique suffix (max 80 chars for base + 20 for suffix)
+            slug = slug[:80].strip('-')
         else:
             # Extract from URL path
             parsed = urlparse(url)
             slug = parsed.path.strip('/').replace('/', '-')
             slug = re.sub(r'[^a-z0-9\-]', '', slug.lower())
+            slug = slug[:80].strip('-')
             
         # Ensure we have something
         if not slug or len(slug) < 3:
@@ -92,7 +94,14 @@ class ConversionService:
         counter = 1
         
         while db.query(Conversion).filter(Conversion.slug == slug).first():
-            slug = f"{base_slug}-{counter}"
+            # Ensure total length stays under 100 chars
+            suffix = f"-{counter}"
+            if len(base_slug) + len(suffix) > 100:
+                # Truncate base_slug to make room for suffix
+                truncated_base = base_slug[:100 - len(suffix)]
+                slug = f"{truncated_base}{suffix}"
+            else:
+                slug = f"{base_slug}{suffix}"
             counter += 1
             
         return slug

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 from typing import List, Optional
 from app.db.database import get_db
 from app.models import Conversion, User
@@ -112,14 +113,9 @@ async def create_conversion(
         from urllib.parse import urlparse
         from datetime import datetime
         
-        # Create slug from title or URL
-        if request.title:
-            slug_base = re.sub(r'[^a-zA-Z0-9\s-]', '', request.title.lower())
-            slug_base = re.sub(r'\s+', '-', slug_base.strip())
-            slug = f"{slug_base}-{str(uuid.uuid4())[:8]}"
-        else:
-            domain = urlparse(request.source_url).netloc.replace('www.', '')
-            slug = f"{domain}-{str(uuid.uuid4())[:8]}"
+        # Use the conversion service to generate proper slug
+        slug_base = conversion_service.generate_slug(request.source_url, request.title)
+        slug = conversion_service.ensure_unique_slug(db, slug_base)
         
         # Calculate word count and reading time
         word_count = len(request.content.split()) if request.content else 0
@@ -267,3 +263,46 @@ async def delete_conversion(
     db.commit()
     
     return {"message": "Conversion deleted successfully"}
+
+@router.get("/conversions/slug/{slug}", response_model=ConversionSchema)
+async def get_conversion_by_slug(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    """Get a conversion by slug for SSR/frontend data fetching"""
+    conversion = db.query(Conversion).filter(
+        Conversion.slug == slug,
+        Conversion.is_public == True
+    ).first()
+    
+    if not conversion:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversion with slug '{slug}' not found"
+        )
+    
+    return conversion
+
+@router.post("/conversions/slug/{slug}/view")
+async def increment_view_count(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    """Increment view count for a conversion"""
+    conversion = db.query(Conversion).filter(
+        Conversion.slug == slug,
+        Conversion.is_public == True
+    ).first()
+    
+    if not conversion:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversion with slug '{slug}' not found"
+        )
+    
+    # Increment view count
+    conversion.view_count += 1
+    conversion.last_viewed_at = func.now()
+    db.commit()
+    
+    return {"message": "View count updated", "view_count": conversion.view_count}

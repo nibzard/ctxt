@@ -82,6 +82,9 @@ setup_backend() {
     cd backend
     source venv/bin/activate
     
+    # Export the correct DATABASE_URL before running Python
+    export DATABASE_URL=postgresql://ctxt_user:ctxt_password@192.168.117.2:5432/ctxt_help
+    
     # Create basic database initialization script
     python -c "
 from app.db.database import create_database
@@ -144,7 +147,7 @@ create_scripts() {
 #!/bin/bash
 cd backend
 source venv/bin/activate
-export DATABASE_URL=postgresql://ctxt_user:ctxt_password@localhost:5432/ctxt_help
+export DATABASE_URL=postgresql://ctxt_user:ctxt_password@192.168.117.2:5432/ctxt_help
 export REDIS_URL=redis://localhost:6379
 export JWT_SECRET_KEY=dev-secret-key-change-in-production
 export DEBUG=true

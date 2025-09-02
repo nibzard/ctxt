@@ -21,15 +21,19 @@ ctxt.help is the first URL-to-markdown converter that combines client-side proce
 
 ## 🏗️ Architecture
 
+**New Unified Architecture (Next.js SSR)**
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Client-Side   │    │   Server-Side   │    │   MCP Server    │
+│   Next.js App   │    │   FastAPI API   │    │   MCP Server    │
 │                 │    │                 │    │                 │
-│ • Jina Reader   │───▶│ • Persistence   │───▶│ • AI Tool       │
-│ • UI/UX         │    │ • SEO Pages     │    │   Integration   │
-│ • Context Stack │    │ • User Library  │    │ • Library API   │
-│ • Free Usage    │    │ • Premium API   │    │ • Context Tools │
+│ • SSR Pages     │───▶│ • Business      │───▶│ • AI Tool       │
+│ • Client SPA    │    │   Logic         │    │   Integration   │ 
+│ • API Proxy     │    │ • Database      │    │ • Library API   │
+│ • Bot Detection │    │ • Auth & Users  │    │ • Context Tools │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
+        │                       │
+        └───────────────────────┘
+         Unified serving on port 3000
 ```
 
 ## 🚀 Quick Start
@@ -44,30 +48,34 @@ ctxt.help is the first URL-to-markdown converter that combines client-side proce
 
 ### Development Setup
 
-#### Quick Start (Recommended)
+#### Quick Start (Recommended) - Next.js Version
 ```bash
-# Clone repository
-git clone https://github.com/username/ctxt.git
+# Start all services with Docker
+docker-compose up frontend-next backend postgresql redis --build
+
+# Or manually:
 cd ctxt
+./start-frontend-next.sh  # Next.js frontend
+./start-backend.sh        # FastAPI backend (separate terminal)
+```
 
-# Automated setup - configures environment and dependencies
-./scripts/setup-environment.sh development
-
-# Start services as instructed by setup script
-cd backend && source venv/bin/activate && uvicorn app.main:app --reload
-cd frontend && npm run dev  # In new terminal
-cd mcp-server && npm run dev  # In new terminal
+#### Legacy Frontend (React + Vite)
+```bash
+# Still available for comparison
+docker-compose up frontend-legacy backend postgresql redis --build
 ```
 
 #### Manual Setup
 ```bash
-# Start infrastructure
-docker-compose up -d
+# Infrastructure
+docker-compose up postgresql redis -d
 
-# Frontend setup
-cd frontend && npm install && npm run dev
+# Next.js Frontend (new approach)
+cd frontend-next
+npm install
+npm run dev
 
-# Backend setup (new terminal)
+# Backend (separate terminal)
 cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -75,15 +83,18 @@ pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
 
-# MCP server setup (new terminal)
+# MCP server (separate terminal)
 cd mcp-server && npm install && npm run build && npm run dev
 ```
 
 **Development URLs:**
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8000  
-- API Documentation: http://localhost:8000/docs
-- MCP Server: http://localhost:3001
+- **Next.js Frontend**: http://localhost:3000 ⭐ *New unified approach*
+- **Legacy Frontend**: http://localhost:5173 (for comparison)
+- **Backend API**: http://localhost:8000  
+- **API Documentation**: http://localhost:8000/docs
+- **MCP Server**: http://localhost:3001
+
+**SEO Pages**: Now served from http://localhost:3000/read/{slug} with unified routing!
 
 ### Environment Configuration
 
@@ -93,7 +104,7 @@ The setup script automatically creates `.env` files with proper defaults. For ma
 # Core Configuration
 ENVIRONMENT=development
 JWT_SECRET_KEY=<generated-32-char-secret>
-DATABASE_URL=postgresql://ctxt_user:ctxt_password@localhost:5432/ctxt_help
+DATABASE_URL=postgresql://ctxt_user:ctxt_password@192.168.117.2:5432/ctxt_help
 REDIS_URL=redis://localhost:6379/0
 
 # Payment Processing (Polar.sh) - Required for production
@@ -124,30 +135,45 @@ ANALYTICS_ENABLED=false
 SENTRY_DSN=https://your-sentry-dsn@sentry.io/project-id
 
 # CORS Settings
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
 **Environment-Specific Configs:** The application loads additional configuration from `backend/config/{environment}.json` files that override defaults for development, production, and testing environments.
+
+**Database Connection Troubleshooting:** If you encounter PostgreSQL connection errors:
+1. Check if local PostgreSQL is running and conflicting with Docker: `lsof -i :5432`
+2. Use the Docker container IP instead of localhost: `192.168.117.2:5432`
+3. Get container IP: `docker network inspect ctxt_default | grep IPv4Address`
 
 ## 📁 Project Structure
 
 ```
 ctxt/
-├── frontend/              # React + TypeScript + Tailwind CSS
+├── frontend-next/         # Next.js 15 + TypeScript + SSR (NEW)
 │   ├── src/
+│   │   ├── app/
+│   │   │   ├── read/[slug]/       # SSR SEO pages
+│   │   │   ├── api/[...path]/     # API proxy routes
+│   │   │   ├── layout.tsx         # Root layout
+│   │   │   └── page.tsx           # Homepage
 │   │   ├── components/        # React components (ContextBuilder, ConversionForm)
 │   │   ├── services/          # API clients and utilities
 │   │   ├── hooks/             # Custom React hooks
-│   │   ├── types/             # TypeScript definitions
-│   │   └── contexts/          # React contexts
-│   ├── tests/                 # Frontend test suites
-│   └── package.json
+│   │   ├── lib/               # Bot detection, utilities
+│   │   └── types/             # TypeScript definitions
+│   ├── middleware.ts          # Next.js middleware for bot detection
+│   ├── tailwind.config.ts     # Tailwind with typography
+│   └── Dockerfile.dev
+├── frontend/              # Legacy React + Vite (for comparison)
+│   └── [existing structure]
 ├── backend/               # FastAPI + Python + PostgreSQL
 │   ├── app/
 │   │   ├── api/               # REST API endpoints
+│   │   │   └── seo.py             # SEO pages (legacy route)
 │   │   ├── core/              # Auth, database, config management
 │   │   ├── models/            # SQLAlchemy database models
 │   │   ├── services/          # Business logic layer
+│   │   │   └── bot_detection.py   # Python bot detection
 │   │   ├── middleware/        # Custom middleware (CORS, rate limiting)
 │   │   └── main.py            # FastAPI application
 │   ├── config/                # Environment-specific configurations
@@ -155,32 +181,29 @@ ctxt/
 │   ├── tests/                 # Backend test suites
 │   └── requirements.txt
 ├── mcp-server/            # Node.js + TypeScript MCP integration
-│   ├── src/
-│   │   ├── tools/             # MCP tool implementations
-│   │   │   ├── convert-url.ts     # URL conversion tool
-│   │   │   ├── search-library.ts  # Library search tool
-│   │   │   └── create-context-stack.ts # Context builder tool
-│   │   ├── api/               # ctxt.help API client
-│   │   └── index.ts           # Main MCP server
-│   ├── tests/                 # MCP server tests
-│   └── package.json
+│   └── [existing structure]
 ├── scripts/               # Setup and utility scripts
-│   ├── setup-environment.sh   # Automated environment setup
-│   └── run-tests.sh           # Test runner script
-├── docker-compose.yml     # Development environment
+├── docker-compose.yml     # Updated with frontend-next service
+├── start-frontend-next.sh # Quick start script
 ├── CLAUDE.md              # Development guidelines
 └── README.md              # This file
 ```
 
 ## 🔧 Technology Stack
 
-### Frontend
-- **Framework**: React 18 + TypeScript + Vite
-- **Styling**: Tailwind CSS + Headless UI
-- **State Management**: React Context + useReducer
-- **HTTP Client**: Axios with interceptors
-- **UI Components**: Drag-and-drop with @dnd-kit
+### Frontend (Next.js - Recommended)
+- **Framework**: Next.js 15 + App Router + TypeScript
+- **Rendering**: SSR for SEO pages, CSR for interactive components
+- **Styling**: Tailwind CSS v4 + Typography plugin
+- **State Management**: React hooks + Context API
+- **HTTP Client**: Axios with interceptors + Next.js API routes
+- **UI Components**: Pragmatic Drag and Drop (Atlassian)
+- **Bot Detection**: Client-side with middleware integration
 - **Testing**: Vitest + React Testing Library (80%+ coverage)
+
+### Frontend (Legacy - React + Vite)
+- **Framework**: React 19 + TypeScript + Vite
+- **Available at**: http://localhost:5173 (for comparison)
 
 ### Backend
 - **Framework**: FastAPI + Python 3.9+ with async/await
@@ -354,10 +377,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🎯 Roadmap
 
-### ✅ Completed (v1.0)
+### ✅ Completed (v1.1)
+- [x] **Next.js Migration** - Unified serving with SSR SEO pages on port 3000
+- [x] **Pragmatic Drag and Drop** - Modern drag-and-drop with Atlassian's library
+- [x] **Bot Detection** - TypeScript implementation with middleware integration
+- [x] **Unified Architecture** - Single frontend serving both SPA and SEO content
 - [x] **Security Hardening** - JWT secrets, SQL injection protection, auth validation
 - [x] **Core Architecture** - Service layer pattern, dependency injection, error handling
-- [x] **Context Builder** - Drag-and-drop UI with React DnD for context stacking
+- [x] **Context Builder** - Drag-and-drop UI for context stacking
 - [x] **MCP Server** - Full implementation with convert-url, search-library, context tools
 - [x] **Authentication System** - Complete JWT auth with user registration/login
 - [x] **Testing Framework** - 85% backend coverage, frontend test suites, automated testing
@@ -366,10 +393,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] **Rate Limiting** - Tier-based rate limiting with Redis backend
 - [x] **Payment Integration** - Polar.sh SDK with configurable products
 
-### 🚧 In Progress (v1.1)
+### 🚧 In Progress (v1.2)  
 - [ ] **Production Deployment** - CI/CD pipeline, monitoring, performance optimization
 - [ ] **API Documentation** - OpenAPI specs, interactive docs, SDK generation
 - [ ] **Browser Extension** - Right-click conversion, clipboard integration
+- [ ] **Performance Optimization** - Edge caching, image optimization, bundle splitting
 
 ### 🎯 Planned (v2.0)
 - [ ] **Team Features** - Shared libraries, collaboration tools

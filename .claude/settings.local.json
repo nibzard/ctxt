@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker inspect:*)",
+      "Bash(docker network inspect:*)",
+      "Bash(psql:*)",
+      "Bash(npm run build:*)",
+      "Bash(source:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(uvicorn:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -39,7 +39,7 @@ services:
     environment:
       DATABASE_URL: postgresql://ctxt_user:ctxt_password@postgresql:5432/ctxt_help
       REDIS_URL: redis://redis:6379
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-please-set-jwt-secret-key-in-env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-secure-jwt-secret-key-for-development-32-characters-minimum}
       DEBUG: "true"
       LOG_LEVEL: debug
     volumes:
@@ -51,7 +51,24 @@ services:
         condition: service_healthy
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
-  frontend:
+  frontend-next:
+    build:
+      context: ./frontend-next
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+    volumes:
+      - ./frontend-next:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: ["npm", "run", "dev"]
+
+  # Keep old frontend for comparison during migration
+  frontend-legacy:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev

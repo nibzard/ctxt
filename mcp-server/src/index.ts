@@ -148,11 +148,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'convert_url':
-        return await convertUrlTool.execute(args);
+        if (!args) throw new McpError(ErrorCode.InvalidParams, 'Missing arguments for convert_url');
+        return await convertUrlTool.execute(args as any);
       case 'search_library':
-        return await searchLibraryTool.execute(args);
+        if (!args) throw new McpError(ErrorCode.InvalidParams, 'Missing arguments for search_library');
+        return await searchLibraryTool.execute(args as any);
       case 'create_context_stack':
-        return await createContextStackTool.execute(args);
+        if (!args) throw new McpError(ErrorCode.InvalidParams, 'Missing arguments for create_context_stack');
+        return await createContextStackTool.execute(args as any);
       default:
         throw new McpError(
           ErrorCode.MethodNotFound,
