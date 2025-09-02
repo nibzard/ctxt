@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { apiService } from '../services';
-import { ConversionRequest, Conversion } from '../types';
+import { ConversionRequest, Conversion } from '../types/api';
 
 interface UseConversionState {
   conversion: Conversion | null;
