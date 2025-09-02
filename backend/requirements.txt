@@ -1,0 +1,24 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+asyncpg
+alembic
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+redis
+pydantic[email]
+pydantic-settings
+python-dotenv
+httpx
+pytest
+pytest-asyncio
+pytest-cov
+psycopg2-binary
+polar-sdk
+
+# Optional dependencies for development
+black==23.11.0
+isort==5.12.0
+mypy==1.7.1
+pre-commit==3.5.0
