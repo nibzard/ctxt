@@ -20,7 +20,7 @@ class ApiService {
   constructor(baseURL: string = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000') {
     this.api = axios.create({
       baseURL,
-      timeout: 30000, // 30 seconds for conversion requests
+      timeout: 90000, // 90 seconds for conversion requests (matches frontend retry logic)
       headers: {
         'Content-Type': 'application/json',
       },
@@ -97,6 +97,39 @@ class ApiService {
   // Delete conversion
   async deleteConversion(id: string): Promise<void> {
     await this.api.delete(`/api/conversions/${id}`);
+  }
+
+  // Save context stack and get permalink
+  async saveContextStack(data: {
+    title: string;
+    blocks: Array<{
+      id: string;
+      type: 'url' | 'text';
+      title?: string;
+      content: string;
+      url?: string;
+      order: number;
+    }>;
+    content: string;
+  }): Promise<Conversion> {
+    // Create a unified content structure
+    const contextContent = data.blocks.map(block => {
+      if (block.type === 'url') {
+        return `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`;
+      }
+      return block.content;
+    }).join('\n\n---\n\n');
+
+    // Save as a regular conversion with special metadata
+    const conversionData = {
+      source_url: 'context://stack',
+      title: data.title,
+      content: contextContent,
+      meta_description: `Context stack with ${data.blocks.length} blocks`
+    };
+
+    const response = await this.api.post<Conversion>('/api/conversions', conversionData);
+    return response.data;
   }
 
   // Check if URL has cached conversion (within 48 hours)

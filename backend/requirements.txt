@@ -19,6 +19,7 @@ factory-boy
 faker
 psycopg2-binary
 polar-sdk
+tiktoken
 
 # Optional dependencies for development
 black==23.11.0

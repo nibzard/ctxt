@@ -12,8 +12,10 @@ import {
   Edit2,
   Check,
   Link,
-  FileText 
+  FileText,
+  Files
 } from 'lucide-react';
+import { estimateTokenCount, formatTokenCount } from '@/utils/tokenCount';
 
 interface ContextBlock {
   id: string;
@@ -31,6 +33,7 @@ interface SortableItemProps {
   onUpdate: (blockId: string, updates: Partial<ContextBlock>) => void;
   onRemove: (blockId: string) => void;
   onMove: (sourceIndex: number, targetIndex: number) => void;
+  onDuplicate: (block: ContextBlock) => void;
 }
 
 const SortableItemComponent: React.FC<SortableItemProps> = ({
@@ -40,6 +43,7 @@ const SortableItemComponent: React.FC<SortableItemProps> = ({
   onUpdate,
   onRemove,
   onMove,
+  onDuplicate,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(block.content);
@@ -96,6 +100,10 @@ const SortableItemComponent: React.FC<SortableItemProps> = ({
   const handleRemove = useCallback(() => {
     onRemove(id);
   }, [id, onRemove]);
+
+  const handleDuplicate = useCallback(() => {
+    onDuplicate(block);
+  }, [block, onDuplicate]);
 
   const handleEdit = useCallback(() => {
     setIsEditing(true);
@@ -216,6 +224,9 @@ const SortableItemComponent: React.FC<SortableItemProps> = ({
               <div className="flex items-center gap-4 text-xs text-gray-500">
                 <span className="capitalize">{block.type} Block</span>
                 <span>Order: {block.order + 1}</span>
+                <span className="font-medium text-blue-600">
+                  {formatTokenCount(estimateTokenCount(block.content))}
+                </span>
                 {block.type === 'text' && (
                   <span>{block.content.length} characters</span>
                 )}
@@ -233,6 +244,13 @@ const SortableItemComponent: React.FC<SortableItemProps> = ({
               title="Edit"
             >
               <Edit2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleDuplicate}
+              className="p-1 text-gray-400 hover:text-purple-600 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+              title="Duplicate"
+            >
+              <Files className="w-4 h-4" />
             </button>
             <button
               onClick={handleRemove}

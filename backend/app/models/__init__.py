@@ -54,7 +54,8 @@ class Conversion(Base):
     # SEO and metadata
     meta_description = Column(String(200), nullable=True)
     word_count = Column(Integer, nullable=True)
-    reading_time = Column(Integer, nullable=True)  # in minutes
+    reading_time = Column(Integer, nullable=True)  # in minutes - deprecated, use token_count
+    token_count = Column(Integer, nullable=True)  # Token count using tiktoken
     topics = Column(JSON, nullable=True)  # Store as JSON array for SQLite compatibility
     
     # Settings

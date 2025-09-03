@@ -57,6 +57,7 @@ class ConversionBase(BaseModel):
     meta_description: Optional[str] = None
     word_count: Optional[int] = None
     reading_time: Optional[int] = None
+    token_count: Optional[int] = None
     topics: Optional[List[str]] = None
     is_public: bool = True
 
@@ -148,6 +149,7 @@ class SEOPageData(BaseModel):
     content: str
     word_count: int
     reading_time: int
+    token_count: int
     topics: List[str]
     created_at: datetime
     view_count: int

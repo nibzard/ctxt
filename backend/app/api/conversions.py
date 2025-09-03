@@ -15,6 +15,7 @@ from app.schemas import (
 )
 from app.services.conversion import conversion_service
 from app.services.rate_limiter import rate_limiter
+from app.services.token_counter import count_tokens
 from app.core.auth import get_current_active_user, get_current_user_optional
 from app.core.exceptions import (
     ConversionError, 
@@ -157,20 +158,27 @@ async def create_conversion(
             Conversion.created_at >= cache_cutoff
         ).order_by(Conversion.created_at.desc()).first()
         
-        # Calculate word count and reading time
+        # Calculate word count, reading time, and token count
         word_count = len(request.content.split()) if request.content else 0
         reading_time = max(1, round(word_count / 200))  # 200 words per minute
+        token_count = count_tokens(request.content) if request.content else 0
         
         # Extract domain
         domain = urlparse(request.source_url).netloc.replace('www.', '')
+        
+        # Ensure meta_description fits database constraint (200 chars max)
+        meta_description = request.meta_description or ""
+        if len(meta_description) > 197:
+            meta_description = meta_description[:194] + "..."
         
         if existing_conversion:
             # Update existing conversion with fresh content
             existing_conversion.title = request.title
             existing_conversion.content = request.content
-            existing_conversion.meta_description = request.meta_description
+            existing_conversion.meta_description = meta_description
             existing_conversion.word_count = word_count
             existing_conversion.reading_time = reading_time
+            existing_conversion.token_count = token_count
             existing_conversion.domain = domain
             existing_conversion.updated_at = func.now()
             
@@ -191,9 +199,10 @@ async def create_conversion(
                 title=request.title,
                 domain=domain,
                 content=request.content,
-                meta_description=request.meta_description,
+                meta_description=meta_description,
                 word_count=word_count,
                 reading_time=reading_time,
+                token_count=token_count,
                 is_public=True,
                 view_count=0
             )

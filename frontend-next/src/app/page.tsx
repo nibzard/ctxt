@@ -40,7 +40,8 @@ export default function Home() {
     savedStacks.push(contextStack);
     localStorage.setItem('contextStacks', JSON.stringify(savedStacks));
     
-    alert(`Context stack "${name}" saved successfully!`);
+    // Context stack saved - could add a toast notification here later
+    console.log(`Context stack "${name}" saved successfully!`);
   };
 
   const generateContextContent = (blocks: ContextBlock[], format: string): string => {
@@ -49,9 +50,11 @@ export default function Home() {
     }
     
     if (format === 'xml') {
-      return `<context>\n${blocks.map((block, index) => 
-        `  <source_${index + 1} type="${block.type}"${block.url ? ` url="${block.url}"` : ''}>\n    ${block.content.replace(/\n/g, '\n    ')}\n  </source_${index + 1}>`
-      ).join('\n')}\n</context>`;
+      return `<context>\n${blocks.map((block, index) => {
+        const tagName = block.type === 'text' ? 'instruction' : 'context';
+        const urlAttr = block.url ? ` source_url="${block.url}"` : '';
+        return `  <${tagName}_${index + 1} type="${block.type}"${block.title ? ` title="${block.title}"` : ''}${urlAttr}>\n    ${block.content.replace(/\n/g, '\n    ')}\n  </${tagName}_${index + 1}>`;
+      }).join('\n')}\n</context>`;
     }
     
     // Markdown format
@@ -91,7 +94,7 @@ export default function Home() {
             >
               <div className="flex items-center space-x-2">
                 <Link2 className="w-4 h-4" />
-                <span>Single URL</span>
+                <span>Add Context</span>
               </div>
             </button>
             <button

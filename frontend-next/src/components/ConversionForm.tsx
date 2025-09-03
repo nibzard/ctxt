@@ -4,10 +4,12 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { Link2, Copy, ExternalLink, FileText, Check, AlertCircle } from 'lucide-react';
-import { useConversion, useClipboard } from '@/hooks';
+import { Link2, FileText, Check, AlertCircle, Copy, ExternalLink } from 'lucide-react';
+import ActionButtons from './ActionButtons';
+import { useConversion } from '@/hooks';
 import { apiService } from '@/services/api';
 import { Conversion } from '@/types/api';
+import { formatTokenCount } from '@/utils/tokenCount';
 
 interface BatchResult {
   url: string;
@@ -24,8 +26,8 @@ const ConversionForm: React.FC = () => {
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchStatus, setBatchStatus] = useState<string>('');
+  const [contextBuilderStatus, setContextBuilderStatus] = useState<string>('');
   const { conversion, loading, error, convertUrl, clearError, isFromCache, cacheAgeHours } = useConversion();
-  const { copy, copied } = useClipboard();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +36,7 @@ const ConversionForm: React.FC = () => {
       if (!url.trim()) return;
       
       if (!apiService.validateUrl(url)) {
-        alert('Please enter a valid URL');
+        // Set error state instead of alert
         return;
       }
 
@@ -44,56 +46,71 @@ const ConversionForm: React.FC = () => {
     }
   };
 
-  const convertSingleUrl = useCallback(async (urlToConvert: string) => {
-    // Create an AbortController for timeout handling
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+  const convertSingleUrl = useCallback(async (urlToConvert: string, timeoutMs: number = 60000, maxRetries: number = 2) => {
+    let lastError: Error | null = null;
     
-    try {
-      const cacheResult = await apiService.checkConversionCache(urlToConvert);
-      
-      if (cacheResult.cached && cacheResult.conversion) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController();
+      const currentTimeout = timeoutMs + (attempt * 15000); // Progressive timeout: 60s, 75s, 90s
+      const timeoutId = setTimeout(() => controller.abort(), currentTimeout);
+    
+      try {
+        const cacheResult = await apiService.checkConversionCache(urlToConvert);
+        
+        if (cacheResult.cached && cacheResult.conversion) {
+          clearTimeout(timeoutId);
+          return cacheResult.conversion;
+        }
+        
+        const jinaUrl = `https://r.jina.ai/${encodeURIComponent(urlToConvert)}`;
+        const jinaResponse = await fetch(jinaUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'X-Return-Format': 'markdown'
+          },
+          signal: controller.signal
+        });
+
         clearTimeout(timeoutId);
-        return cacheResult.conversion;
-      }
-      
-      const jinaUrl = `https://r.jina.ai/${encodeURIComponent(urlToConvert)}`;
-      const jinaResponse = await fetch(jinaUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'X-Return-Format': 'markdown'
-        },
-        signal: controller.signal
-      });
 
-      clearTimeout(timeoutId);
+        if (!jinaResponse.ok) {
+          throw new Error(`Jina Reader API error: ${jinaResponse.status}`);
+        }
 
-      if (!jinaResponse.ok) {
-        throw new Error(`Jina Reader API error: ${jinaResponse.status}`);
-      }
+        const jinaData = await jinaResponse.json();
+        
+        if (jinaData.code !== 200) {
+          throw new Error(`Jina Reader failed with code: ${jinaData.code}`);
+        }
 
-      const jinaData = await jinaResponse.json();
-      
-      if (jinaData.code !== 200) {
-        throw new Error(`Jina Reader failed with code: ${jinaData.code}`);
+        const conversion = await apiService.saveConversion({
+          source_url: urlToConvert,
+          title: jinaData.data.title,
+          content: jinaData.data.content,
+          meta_description: jinaData.data.description
+        });
+        
+        return conversion;
+      } catch (error) {
+        clearTimeout(timeoutId);
+        lastError = error as Error;
+        
+        // If it's the last attempt, throw the error
+        if (attempt === maxRetries) {
+          if (lastError.name === 'AbortError') {
+            throw new Error(`Request timed out after ${Math.round(currentTimeout / 1000)} seconds (${maxRetries + 1} attempts)`);
+          }
+          throw lastError;
+        }
+        
+        // Wait before retry (exponential backoff)
+        const retryDelay = Math.min(2000 * Math.pow(2, attempt), 10000);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
-
-      const conversion = await apiService.saveConversion({
-        source_url: urlToConvert,
-        title: jinaData.data.title,
-        content: jinaData.data.content,
-        meta_description: jinaData.data.description
-      });
-      
-      return conversion;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Request timed out after 30 seconds');
-      }
-      throw error;
     }
+    
+    throw lastError || new Error('Failed to convert URL after all retries');
   }, []);
 
   const handleBatchConversion = useCallback(async () => {
@@ -121,7 +138,8 @@ const ConversionForm: React.FC = () => {
       setBatchStatus(`Converting ${i + 1} of ${urls.length}: ${currentUrl}`);
       
       try {
-        const result = await convertSingleUrl(currentUrl);
+        // Use longer timeout for batch conversions and retry logic
+        const result = await convertSingleUrl(currentUrl, 75000, 2); // 75s initial timeout, 2 retries
         results.push({
           url: currentUrl,
           success: true,
@@ -140,9 +158,10 @@ const ConversionForm: React.FC = () => {
       // Update results incrementally for better UX
       setBatchResults([...results]);
       
-      // Small delay to prevent overwhelming the API
+      // Adaptive delay based on previous success/failure
       if (i < urls.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 800));
+        const delay = results[results.length - 1].success ? 1000 : 2000; // Longer delay after failures
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
     
@@ -151,24 +170,55 @@ const ConversionForm: React.FC = () => {
     setBatchLoading(false);
   }, [batchUrls, convertSingleUrl]);
 
-  const handleCopyToClipboard = () => {
-    if (conversion?.content) {
-      copy(conversion.content);
-    }
+  // Action handlers
+  const handleAddToContext = () => {
+    addToContextBuilder();
   };
 
-  const openInChatGPT = () => {
-    if (conversion?.slug) {
-      const chatGPTUrl = apiService.generateChatGPTLink(conversion.slug);
-      window.open(chatGPTUrl, '_blank');
+  const addToContextBuilder = () => {
+    if (!conversion) return;
+    
+    const contextBlock = {
+      id: `single-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      type: 'url' as const,
+      title: conversion.title,
+      content: conversion.content,
+      url: conversion.source_url,
+      order: 0
+    };
+    
+    // Get existing batch import or create new array
+    const existingImport = localStorage.getItem('batchImport');
+    let importBlocks = [];
+    
+    if (existingImport) {
+      try {
+        importBlocks = JSON.parse(existingImport);
+        if (!Array.isArray(importBlocks)) {
+          importBlocks = [];
+        }
+      } catch (error) {
+        console.error('Error parsing existing batch import:', error);
+        importBlocks = [];
+      }
     }
-  };
-
-  const openInClaude = () => {
-    if (conversion?.slug) {
-      const claudeUrl = apiService.generateClaudeLink(conversion.slug);
-      window.open(claudeUrl, '_blank');
+    
+    // Check if this block already exists (prevent duplicates)
+    const existingBlock = importBlocks.find((block: any) => 
+      block.url === contextBlock.url && block.title === contextBlock.title
+    );
+    
+    if (!existingBlock) {
+      // Add the new block
+      importBlocks.push(contextBlock);
+      
+      // Store back to localStorage
+      localStorage.setItem('batchImport', JSON.stringify(importBlocks));
     }
+    
+    // Show success message
+    setContextBuilderStatus('Added to Context Builder! Switch to the Context Builder tab to view it.');
+    setTimeout(() => setContextBuilderStatus(''), 4000);
   };
 
   return (
@@ -335,6 +385,15 @@ const ConversionForm: React.FC = () => {
               </div>
             )}
             
+            {contextBuilderStatus && (
+              <div className="mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center text-sm text-green-700">
+                  <Check className="w-4 h-4 mr-2" />
+                  <span>{contextBuilderStatus}</span>
+                </div>
+              </div>
+            )}
+            
             <h2 className="text-xl font-semibold text-gray-900 mb-2">
               {conversion.title || 'Converted Content'}
             </h2>
@@ -343,45 +402,17 @@ const ConversionForm: React.FC = () => {
               <span>•</span>
               <span>{conversion.word_count} words</span>
               <span>•</span>
-              <span>{conversion.reading_time} min read</span>
+              <span>{formatTokenCount(conversion.token_count || 0)}</span>
             </div>
           </div>
 
           {/* Action Buttons */}
-          <div className="flex flex-wrap gap-3 mb-6">
-            <button
-              onClick={handleCopyToClipboard}
-              className="flex items-center space-x-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-4 h-4 text-green-600" />
-                  <span className="text-green-600">Copied!</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4" />
-                  <span>Copy Markdown</span>
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={openInChatGPT}
-              className="flex items-center space-x-2 px-4 py-2 bg-green-100 hover:bg-green-200 rounded-lg transition-colors"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>Send to ChatGPT</span>
-            </button>
-
-            <button
-              onClick={openInClaude}
-              className="flex items-center space-x-2 px-4 py-2 bg-orange-100 hover:bg-orange-200 rounded-lg transition-colors"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>Send to Claude</span>
-            </button>
-          </div>
+          <ActionButtons
+            slug={conversion.slug}
+            content={conversion.content}
+            onAddToContext={handleAddToContext}
+            className="mb-6"
+          />
 
           {/* Content Preview */}
           <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
@@ -456,20 +487,61 @@ const ConversionForm: React.FC = () => {
                 {result.success && result.result ? (
                   <div>
                     <div className="text-sm text-gray-700 mb-2">
-                      {result.result.word_count} words • {result.result.reading_time} min read • {result.result.domain}
+                      {result.result.word_count} words • {formatTokenCount(result.result.token_count || 0)} • {result.result.domain}
                     </div>
                     
-                    <div className="flex space-x-2 mb-3">
-                      <button
-                        onClick={() => copy(result.result.content)}
-                        className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded"
-                      >
-                        Copy Markdown
-                      </button>
+                    {/* Action buttons for individual batch results */}
+                    <div className="mb-3">
+                      <ActionButtons
+                        slug={result.result.slug}
+                        content={result.result.content}
+                        onAddToContext={() => {
+                          if (!result.result) return;
+                          
+                          const contextBlock = {
+                            id: `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                            type: 'url' as const,
+                            title: result.result.title,
+                            content: result.result.content,
+                            url: result.url,
+                            order: 0
+                          };
+                          
+                          const existingImport = localStorage.getItem('batchImport');
+                          let importBlocks = [];
+                          
+                          if (existingImport) {
+                            try {
+                              importBlocks = JSON.parse(existingImport);
+                              if (!Array.isArray(importBlocks)) {
+                                importBlocks = [];
+                              }
+                            } catch (error) {
+                              console.error('Error parsing existing batch import:', error);
+                              importBlocks = [];
+                            }
+                          }
+                          
+                          // Check for duplicates
+                          const existingBlock = importBlocks.find((block: any) => 
+                            block.url === contextBlock.url && block.title === contextBlock.title
+                          );
+                          
+                          if (!existingBlock) {
+                            importBlocks.push(contextBlock);
+                            localStorage.setItem('batchImport', JSON.stringify(importBlocks));
+                          }
+                        }}
+                        className="scale-75 origin-left"
+                      />
+                      
+                      {/* Additional copy permanent link button for batch results */}
                       {result.result.slug && (
                         <button
-                          onClick={() => copy(apiService.getSEOPageUrl(result.result.slug))}
-                          className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 rounded"
+                          onClick={() => {
+                            navigator.clipboard.writeText(apiService.getSEOPageUrl(result.result?.slug || ''));
+                          }}
+                          className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 rounded ml-2"
                         >
                           Copy Permanent Link
                         </button>
@@ -503,8 +575,8 @@ const ConversionForm: React.FC = () => {
                   onClick={() => {
                     const successfulResults = batchResults
                       .filter(r => r.success)
-                      .map(r => ({
-                        id: `batch-${Date.now()}-${Math.random()}`,
+                      .map((r, index) => ({
+                        id: `batch-bulk-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
                         type: 'url' as const,
                         title: r.result?.title,
                         content: r.result?.content || '',
@@ -512,9 +584,37 @@ const ConversionForm: React.FC = () => {
                         order: 0
                       }));
                     
-                    // Store in localStorage for context builder to pick up
-                    localStorage.setItem('batchImport', JSON.stringify(successfulResults));
-                    alert(`${successfulResults.length} conversions ready for Context Builder. Switch to the Context Builder tab to import them.`);
+                    // Get existing imports and merge
+                    const existingImport = localStorage.getItem('batchImport');
+                    let importBlocks = [];
+                    
+                    if (existingImport) {
+                      try {
+                        importBlocks = JSON.parse(existingImport);
+                        if (!Array.isArray(importBlocks)) {
+                          importBlocks = [];
+                        }
+                      } catch (error) {
+                        console.error('Error parsing existing batch import:', error);
+                        importBlocks = [];
+                      }
+                    }
+                    
+                    // Filter out duplicates and add new blocks
+                    const newBlocks = successfulResults.filter(newBlock => 
+                      !importBlocks.some((existing: any) => 
+                        existing.url === newBlock.url && existing.title === newBlock.title
+                      )
+                    );
+                    
+                    if (newBlocks.length > 0) {
+                      importBlocks.push(...newBlocks);
+                      localStorage.setItem('batchImport', JSON.stringify(importBlocks));
+                    }
+                    
+                    // Show success message in the UI instead of alert
+                    const exportCount = newBlocks.length > 0 ? newBlocks.length : successfulResults.length;
+                    setBatchStatus(`${exportCount} conversions exported to Context Builder. Switch to the Context Builder tab to view them.`);
                   }}
                   className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
                 >

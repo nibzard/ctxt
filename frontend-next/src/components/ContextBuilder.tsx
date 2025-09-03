@@ -3,11 +3,13 @@
 
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { SortableItem } from './SortableItem';
 import { DropZone } from './DropZone';
-import { Plus, Save, Download } from 'lucide-react';
+import ActionButtons from './ActionButtons';
+import { Plus, Save, Download, Trash2 } from 'lucide-react';
 import { apiService } from '@/services/api';
+import { estimateTokenCount, formatTokenCount, getContextUsage } from '@/utils/tokenCount';
 
 interface ContextBlock {
   id: string;
@@ -38,36 +40,147 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   const [isAddingBlock, setIsAddingBlock] = useState(false);
   const [exportFormat, setExportFormat] = useState<'xml' | 'markdown' | 'json'>('xml');
   const [isConverting, setIsConverting] = useState(false);
-  const [hasCheckedImport, setHasCheckedImport] = useState(false);
+  const [importedBlockIds, setImportedBlockIds] = useState<Set<string>>(new Set());
+  const [importNotification, setImportNotification] = useState<string>('');
+  const isImportingRef = useRef(false);
+  const debounceTimerRef = useRef<NodeJS.Timeout>();
 
-  // Check for batch import on component mount (only once)
-  useEffect(() => {
-    if (hasCheckedImport) return;
+  // Function to actually perform the batch import
+  const performBatchImport = useCallback(() => {
+    // Prevent concurrent imports
+    if (isImportingRef.current) return;
     
     const batchImport = localStorage.getItem('batchImport');
-    if (batchImport) {
-      try {
-        const importedBlocks = JSON.parse(batchImport);
-        if (Array.isArray(importedBlocks) && importedBlocks.length > 0) {
-          // Update order for imported blocks
-          const updatedBlocks = importedBlocks.map((block: ContextBlock, index: number) => ({
-            ...block,
-            order: blocks.length + index
-          }));
+    if (!batchImport) return;
+
+    isImportingRef.current = true;
+
+    try {
+      const importedBlocks = JSON.parse(batchImport);
+      if (Array.isArray(importedBlocks) && importedBlocks.length > 0) {
+        
+        // Use functional state update to get the most current blocks and imported IDs
+        setBlocks(currentBlocks => {
+          // Filter out blocks we've already imported using current state
+          const newBlocks = importedBlocks.filter((block: ContextBlock) => 
+            !importedBlockIds.has(block.id) && 
+            !currentBlocks.some(existingBlock => 
+              existingBlock.id === block.id || 
+              (existingBlock.url === block.url && existingBlock.title === block.title)
+            )
+          );
           
-          setBlocks(prev => [...prev, ...updatedBlocks]);
-          localStorage.removeItem('batchImport');
-          
+          if (newBlocks.length === 0) {
+            isImportingRef.current = false;
+            return currentBlocks; // No new blocks to add
+          }
+
+          // Update imported block IDs and localStorage
+          setImportedBlockIds(prevIds => {
+            const newSet = new Set(prevIds);
+            newBlocks.forEach((block: ContextBlock) => newSet.add(block.id));
+            
+            // Clear localStorage since we're importing all remaining blocks
+            localStorage.removeItem('batchImport');
+            
+            return newSet;
+          });
+
           // Show notification
-          const count = importedBlocks.length;
-          alert(`Imported ${count} conversion${count > 1 ? 's' : ''} from batch processing!`);
+          const count = newBlocks.length;
+          setImportNotification(`Imported ${count} conversion${count > 1 ? 's' : ''} from batch processing`);
+          setTimeout(() => setImportNotification(''), 4000);
+
+          // Add new blocks with correct ordering
+          const updatedBlocks = newBlocks.map((block: ContextBlock, index: number) => ({
+            ...block,
+            order: currentBlocks.length + index
+          }));
+
+          isImportingRef.current = false;
+          return [...currentBlocks, ...updatedBlocks];
+        });
+      }
+    } catch (error) {
+      console.error('Error importing batch conversions:', error);
+      isImportingRef.current = false;
+    }
+  }, [importedBlockIds]);
+
+  // Debounced version of batch import check
+  const checkForBatchImport = useCallback(() => {
+    // Clear existing timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    // Set new timer
+    debounceTimerRef.current = setTimeout(() => {
+      performBatchImport();
+    }, 100);
+  }, [performBatchImport]);
+
+  // Check for batch import on component mount
+  useEffect(() => {
+    checkForBatchImport();
+  }, []);
+
+  // Check for batch imports when component becomes visible
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        checkForBatchImport();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      // Clean up debounce timer
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [checkForBatchImport]);
+
+  // Load draft from localStorage AFTER checking for imports
+  useEffect(() => {
+    // First check for batch imports, then load draft if no imports and no existing blocks
+    const batchImport = localStorage.getItem('batchImport');
+    if (!batchImport && initialBlocks.length === 0 && blocks.length === 0) {
+      const savedDraft = localStorage.getItem('contextBuilderDraft');
+      if (savedDraft) {
+        try {
+          const draft = JSON.parse(savedDraft);
+          if (draft.blocks && Array.isArray(draft.blocks) && draft.blocks.length > 0) {
+            setBlocks(draft.blocks);
+          }
+          if (draft.stackName && typeof draft.stackName === 'string') {
+            setStackName(draft.stackName);
+          }
+        } catch (error) {
+          console.error('Error loading draft from localStorage:', error);
         }
-      } catch (error) {
-        console.error('Error importing batch conversions:', error);
       }
     }
-    setHasCheckedImport(true);
-  }, [hasCheckedImport, blocks.length]);
+  }, []); // Run only on mount after batch import check
+
+  // Save draft to localStorage whenever blocks or stackName changes
+  useEffect(() => {
+    // Only save if we have blocks or a stack name
+    if (blocks.length > 0 || stackName.trim()) {
+      const draft = {
+        blocks,
+        stackName,
+        savedAt: new Date().toISOString()
+      };
+      localStorage.setItem('contextBuilderDraft', JSON.stringify(draft));
+    } else {
+      // Clear draft if no blocks and no name
+      localStorage.removeItem('contextBuilderDraft');
+    }
+  }, [blocks, stackName]);
 
   const handleDragEnd = useCallback((sourceIndex: number, targetIndex: number) => {
     if (sourceIndex === targetIndex) return;
@@ -199,6 +312,20 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     ));
   }, []);
 
+  const duplicateBlock = useCallback((block: ContextBlock) => {
+    const newBlock: ContextBlock = {
+      ...block,
+      id: `block-${Date.now()}-${Math.random()}`,
+      order: blocks.length, // Add to end
+      title: block.title ? `${block.title} (Copy)` : undefined
+    };
+    
+    setBlocks(prev => [...prev, newBlock].map((b, index) => ({
+      ...b,
+      order: index
+    })));
+  }, [blocks.length]);
+
   const handleExport = useCallback(() => {
     if (onExport) {
       onExport(blocks, exportFormat);
@@ -208,8 +335,49 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   const handleSave = useCallback(() => {
     if (onSave && stackName.trim()) {
       onSave(stackName, blocks);
+      // Optionally clear the draft after saving
+      // setBlocks([]);
+      // setStackName('');
+      // localStorage.removeItem('contextBuilderDraft');
     }
   }, [blocks, stackName, onSave]);
+
+  const generateFullContext = useCallback((): string => {
+    // Generate markdown format matching the single URL behavior
+    return blocks.map(block => {
+      if (block.type === 'url') {
+        return `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`;
+      }
+      return block.content;
+    }).join('\n\n---\n\n');
+  }, [blocks]);
+
+  const calculateTotalTokens = useCallback(() => {
+    const fullContent = generateFullContext();
+    return estimateTokenCount(fullContent);
+  }, [generateFullContext]);
+
+  const getTokensForBlock = useCallback((block: ContextBlock) => {
+    const blockContent = block.type === 'url' 
+      ? `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`
+      : block.content;
+    return estimateTokenCount(blockContent);
+  }, []);
+
+  const handleContextSaved = useCallback((slug: string) => {
+    // Optional: Show success message or update UI
+    console.log('Context stack saved with slug:', slug);
+  }, []);
+
+  const handleClearAll = useCallback(() => {
+    if (blocks.length === 0 && !stackName.trim()) return;
+    
+    if (window.confirm('Are you sure you want to clear all blocks and start over?')) {
+      setBlocks([]);
+      setStackName('');
+      localStorage.removeItem('contextBuilderDraft');
+    }
+  }, [blocks.length, stackName]);
 
   const generatePreview = useCallback(() => {
     // Limit preview to first 2000 chars to improve performance
@@ -226,9 +394,11 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     }).join('\n\n---\n\n');
 
     if (exportFormat === 'xml') {
-      const xmlContent = `<context>\n${blocks.map((block, index) => 
-        `  <source_${index + 1} type="${block.type}"${block.url ? ` url="${block.url}"` : ''}>\n    ${truncateForPreview(block.content, 500).replace(/\n/g, '\n    ')}\n  </source_${index + 1}>`
-      ).join('\n')}\n</context>`;
+      const xmlContent = `<context>\n${blocks.map((block, index) => {
+        const tagName = block.type === 'text' ? 'instruction' : 'context';
+        const urlAttr = block.url ? ` source_url="${block.url}"` : '';
+        return `  <${tagName}_${index + 1} type="${block.type}"${block.title ? ` title="${block.title}"` : ''}${urlAttr}>\n    ${truncateForPreview(block.content, 500).replace(/\n/g, '\n    ')}\n  </${tagName}_${index + 1}>`;
+      }).join('\n')}\n</context>`;
       return truncateForPreview(xmlContent);
     } else if (exportFormat === 'json') {
       const jsonContent = JSON.stringify({ 
@@ -251,17 +421,26 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
           Build your context by adding URLs and text blocks. Drag to reorder them.
         </p>
         
+        {/* Import notification */}
+        {importNotification && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+            <div className="text-sm text-green-800 flex items-center space-x-2">
+              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+              <span>{importNotification}</span>
+            </div>
+          </div>
+        )}
+        
         {/* Check for available batch import */}
         {typeof window !== 'undefined' && localStorage.getItem('batchImport') && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
             <div className="flex items-center justify-between">
               <div className="text-sm text-blue-800">
-                <strong>Batch conversions ready to import!</strong> You have converted URLs waiting to be added.
+                <strong>Conversions ready to import!</strong> You have {JSON.parse(localStorage.getItem('batchImport') || '[]').length} converted URL{JSON.parse(localStorage.getItem('batchImport') || '[]').length > 1 ? 's' : ''} waiting to be added.
               </div>
               <button
                 onClick={() => {
-                  // Force re-run the useEffect by triggering a state change
-                  window.location.reload();
+                  checkForBatchImport();
                 }}
                 className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
               >
@@ -272,7 +451,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         )}
         
         <div className="text-sm text-gray-500">
-          <strong>Pro tip:</strong> Use the &quot;Single URL&quot; tab to convert multiple URLs in batch, then export them here for organization and further editing.
+          <strong>Pro tip:</strong> Use the &quot;Add Context&quot; tab to convert individual URLs or batch convert multiple URLs, then export them here for organization and further editing.
         </div>
       </div>
 
@@ -317,6 +496,52 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             </button>
           </div>
         </div>
+        
+        {/* Token Count Summary */}
+        {blocks.length > 0 && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-medium text-blue-900 mb-1">Context Usage</h4>
+                <p className="text-sm text-blue-700">
+                  Total: <span className="font-semibold">{formatTokenCount(calculateTotalTokens())}</span>
+                  {(() => {
+                    const usage = getContextUsage(calculateTotalTokens());
+                    return (
+                      <span className="ml-2 text-xs">
+                        ({usage.usagePercentage}% of GPT-4 context)
+                      </span>
+                    );
+                  })()}
+                </p>
+              </div>
+              <div className="text-xs text-blue-600">
+                <div>{blocks.length} block{blocks.length !== 1 ? 's' : ''}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons using reusable component */}
+        {blocks.length > 0 && (
+          <div className="flex flex-wrap gap-3 mb-4">
+            <ActionButtons
+              contextBlocks={blocks}
+              contextContent={generateFullContext()}
+              onContextSaved={handleContextSaved}
+              className="flex-1"
+            />
+            
+            <button
+              onClick={handleClearAll}
+              disabled={blocks.length === 0 && !stackName.trim()}
+              className="flex items-center space-x-2 px-4 py-2 bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:cursor-not-allowed rounded-lg transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Clear All</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Add Block Section */}
@@ -422,6 +647,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
                   onUpdate={updateBlock}
                   onRemove={removeBlock}
                   onMove={handleDragEnd}
+                  onDuplicate={duplicateBlock}
                 />
                 <DropZone index={index + 1} onDrop={handleDragEnd} />
               </React.Fragment>
@@ -436,9 +662,16 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
             Preview ({exportFormat})
           </h3>
-          <pre className="bg-white border rounded p-4 text-sm overflow-auto max-h-96 whitespace-pre-wrap">
+          <pre className="bg-white border rounded p-4 text-sm overflow-auto max-h-96 whitespace-pre-wrap mb-4">
             {generatePreview()}
           </pre>
+          
+          {/* Action Buttons for Preview */}
+          <ActionButtons
+            contextBlocks={blocks}
+            contextContent={generateFullContext()}
+            onContextSaved={handleContextSaved}
+          />
         </div>
       )}
     </div>

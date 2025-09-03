@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Conversion
 from app.schemas import ConversionRequest, ConversionOptions
+from app.services.token_counter import count_tokens
 import logging
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class ConversionService:
                 title = self._extract_title(markdown_content)
                 word_count = self._count_words(markdown_content)
                 reading_time = self._calculate_reading_time(word_count)
+                token_count = count_tokens(markdown_content)
                 domain = self._extract_domain(url)
                 
                 return {
@@ -49,6 +51,7 @@ class ConversionService:
                     "domain": domain,
                     "word_count": word_count,
                     "reading_time": reading_time,
+                    "token_count": token_count,
                     "meta_description": self._generate_description(markdown_content, title)
                 }
                 
@@ -148,11 +151,16 @@ class ConversionService:
                 description = line
                 break
         
-        # Truncate to 160 characters for SEO
-        if len(description) > 160:
-            description = description[:157] + "..."
+        # Ensure we have a fallback description
+        if not description:
+            description = "Clean markdown conversion from webpage"
             
-        return description or "Clean markdown conversion from webpage"
+        # Truncate to 197 characters to fit database limit (200 chars)
+        # Leave room for "..." if truncation is needed
+        if len(description) > 197:
+            description = description[:194] + "..."
+            
+        return description
 
 class SEOService:
     """Service for generating SEO-optimized pages"""

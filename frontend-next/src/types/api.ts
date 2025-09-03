@@ -22,7 +22,8 @@ export interface Conversion {
   content: string;
   meta_description?: string;
   word_count: number;
-  reading_time: number;
+  reading_time: number; // deprecated - use token_count
+  token_count: number;
   is_public: boolean;
   view_count: number;
   created_at: string;
