@@ -57,7 +57,7 @@ export function parseContextBlocksFromContent(content: string): ContextBlock[] {
  * Check if a conversion is a context stack
  */
 export function isContextStack(conversion: { source_url: string }): boolean {
-  return conversion.source_url === 'context://stack';
+  return conversion.source_url.startsWith('context://stack');
 }
 
 /**

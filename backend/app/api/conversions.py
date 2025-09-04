@@ -152,11 +152,14 @@ async def create_conversion(
         from urllib.parse import urlparse
         
         # Check if we have an existing conversion for this URL within 48 hours
-        cache_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
-        existing_conversion = db.query(Conversion).filter(
-            Conversion.source_url == request.source_url,
-            Conversion.created_at >= cache_cutoff
-        ).order_by(Conversion.created_at.desc()).first()
+        # Skip caching for context stacks as they should always be unique
+        existing_conversion = None
+        if not request.source_url.startswith('context://stack'):
+            cache_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+            existing_conversion = db.query(Conversion).filter(
+                Conversion.source_url == request.source_url,
+                Conversion.created_at >= cache_cutoff
+            ).order_by(Conversion.created_at.desc()).first()
         
         # Calculate word count, reading time, and token count
         word_count = len(request.content.split()) if request.content else 0

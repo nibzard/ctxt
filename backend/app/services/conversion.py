@@ -69,6 +69,24 @@ class ConversionService:
     
     def generate_slug(self, url: str, title: Optional[str] = None) -> str:
         """Generate SEO-friendly slug for conversion"""
+        # Special handling for context stacks
+        if url.startswith('context://stack'):
+            # Use title + timestamp for context stacks to ensure uniqueness
+            base_slug = "context-stack"
+            if title and len(title.strip()) > 3:
+                title_part = title.lower()
+                # Remove special characters and normalize
+                title_part = re.sub(r'[^a-z0-9\s\-]', '', title_part)
+                title_part = re.sub(r'\s+', '-', title_part)
+                title_part = re.sub(r'-+', '-', title_part)
+                title_part = title_part[:50].strip('-')  # Limit title part to 50 chars
+                base_slug = f"context-stack-{title_part}"
+            
+            # Add timestamp for uniqueness
+            import time
+            timestamp = int(time.time())
+            return f"{base_slug}-{timestamp}"
+        
         if title and len(title.strip()) > 10:
             # Use title for slug
             slug = title.lower()

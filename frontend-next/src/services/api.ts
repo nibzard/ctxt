@@ -126,9 +126,13 @@ class ApiService {
       return block.content;
     }).join('\n\n---\n\n');
 
+    // Generate unique source URL for each context stack to prevent collisions
+    const timestamp = Date.now();
+    const uniqueId = Math.random().toString(36).substring(2, 9);
+    
     // Save as a regular conversion with special metadata
     const conversionData = {
-      source_url: 'context://stack',
+      source_url: `context://stack/${timestamp}-${uniqueId}`,
       title: data.title,
       content: contextContent,
       meta_description: `Context stack with ${data.blocks.length} blocks`
@@ -167,17 +171,21 @@ class ApiService {
     }
   }
 
-  // Generate ChatGPT link with permalink - requires context stack determination
+  // Generate ChatGPT link with permalink - uses XML for context stacks, markdown for pages
   generateChatGPTLink(slug: string, isContextStack: boolean = false): string {
-    const permalink = this.getSEOPageUrl(slug, isContextStack);
+    const permalink = isContextStack 
+      ? this.getXmlUrl(slug)  // Context stacks get XML format
+      : this.getMarkdownUrl(slug, false); // Pages get markdown format
     const prompt = `Read the context at: ${permalink}`;
     const encodedPrompt = encodeURIComponent(prompt);
     return `https://chatgpt.com/?q=${encodedPrompt}`;
   }
 
-  // Generate Claude link with permalink - requires context stack determination
+  // Generate Claude link with permalink - uses XML for context stacks, markdown for pages
   generateClaudeLink(slug: string, isContextStack: boolean = false): string {
-    const permalink = this.getSEOPageUrl(slug, isContextStack);
+    const permalink = isContextStack 
+      ? this.getXmlUrl(slug)  // Context stacks get XML format
+      : this.getMarkdownUrl(slug, false); // Pages get markdown format
     const prompt = `Read the context at: ${permalink}`;
     const encodedPrompt = encodeURIComponent(prompt);
     return `https://claude.ai/new?q=${encodedPrompt}`;
