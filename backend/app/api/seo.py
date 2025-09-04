@@ -1,78 +1,150 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response, RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, func
 from app.db.database import get_db
 from app.models import Conversion, ContextStack
 from app.services.bot_detection import bot_detector
 from app.core.config import settings
 import logging
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from xml.etree.ElementTree import Element, SubElement, tostring
 import xml.etree.ElementTree as ET
+import uuid
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/read/{slug}")
-async def get_seo_page(
+async def redirect_read_to_page(slug: str):
+    """
+    Permanent redirect from deprecated /read/{slug} to /page/{slug}
+    """
+    return RedirectResponse(
+        url=f"/page/{slug}",
+        status_code=status.HTTP_301_MOVED_PERMANENTLY
+    )
+
+@router.get("/page/{slug}")
+async def get_conversion_page(
     slug: str,
     request: Request,
     db: Session = Depends(get_db)
 ):
     """
-    Serve SEO-optimized pages for conversions
-    - Returns HTML for human users (browsers)
-    - Returns raw markdown for bots/crawlers
+    Serve conversion as SEO-optimized page
     """
-    
-    # Get user agent from request headers
-    user_agent = request.headers.get("user-agent", "")
-    
-    # Query conversion from database
-    conversion = db.query(Conversion).filter(Conversion.slug == slug).first()
-    
-    if not conversion:
+    try:
+        # Get conversion by slug
+        conversion = db.query(Conversion).filter(
+            and_(
+                Conversion.slug == slug,
+                Conversion.is_public == True
+            )
+        ).first()
+        
+        if not conversion:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Page not found"
+            )
+        
+        # Increment view count
+        conversion.view_count += 1
+        db.commit()
+        
+        # Check if bot/crawler for content type decision
+        user_agent = request.headers.get("user-agent")
+        if bot_detector.should_serve_markdown(user_agent):
+            bot_detector.log_bot_access(user_agent, slug, True)
+            return await serve_markdown_content(conversion, request)
+        else:
+            return await serve_html_content(conversion, request)
+            
+    except Exception as e:
+        logger.error(f"Error serving conversion page {slug}: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversion with slug '{slug}' not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load page"
         )
-    
-    # Increment view count
-    conversion.view_count += 1
-    db.commit()
-    
-    # Detect if request is from a bot/crawler
-    should_serve_markdown = bot_detector.should_serve_markdown(user_agent)
-    
-    # Log bot access for monitoring
-    bot_detector.log_bot_access(user_agent, slug, should_serve_markdown)
-    
-    if should_serve_markdown:
+
+@router.get("/page/{slug}.md")
+async def get_conversion_markdown(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serve conversion as markdown
+    """
+    try:
+        # Get conversion by slug
+        conversion = db.query(Conversion).filter(
+            and_(
+                Conversion.slug == slug,
+                Conversion.is_public == True
+            )
+        ).first()
+        
+        if not conversion:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Page not found"
+            )
+        
         return await serve_markdown_content(conversion, request)
-    else:
-        return await serve_html_content(conversion, request)
+        
+    except Exception as e:
+        logger.error(f"Error serving conversion markdown {slug}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load markdown"
+        )
 
 async def serve_markdown_content(conversion: Conversion, request: Request) -> PlainTextResponse:
     """Serve raw markdown content for bots and crawlers"""
     
-    # Add metadata header for markdown
-    markdown_content = f"""# {conversion.title}
+    # Calculate reading time if not available
+    reading_time = conversion.reading_time or max(1, conversion.word_count // 200)
+    
+    # Add structured frontmatter for AI consumption
+    markdown_content = f"""---
+title: "{conversion.title}"
+source_url: "{conversion.source_url}"
+domain: "{conversion.domain}"
+slug: "{conversion.slug}"
+published_date: "{conversion.created_at.strftime('%Y-%m-%d')}"
+last_modified: "{(conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')}"
+word_count: {conversion.word_count}
+reading_time_minutes: {reading_time}
+view_count: {conversion.view_count}
+content_type: "webpage_conversion"
+source: "ctxt.help"
+canonical_url: "https://ctxt.help/page/{conversion.slug}"
+---
 
-**Source:** {conversion.source_url}
-**Domain:** {conversion.domain}
-**Published:** {conversion.created_at.strftime('%Y-%m-%d')}
-**Word Count:** {conversion.word_count}
-**Reading Time:** {conversion.reading_time} minutes
+# {conversion.title}
+
+**📄 Source:** [{conversion.domain}]({conversion.source_url})  
+**📅 Published:** {conversion.created_at.strftime('%Y-%m-%d')}  
+**📖 Content:** {conversion.word_count} words · {reading_time} min read  
+**🔗 Permanent Link:** https://ctxt.help/page/{conversion.slug}
 
 ---
 
 {conversion.content}
 
 ---
-*Converted by ctxt.help - The LLM Context Builder*
-*Permanent link: https://ctxt.help/read/{conversion.slug}*
+
+**About this conversion:**
+- Converted from: {conversion.source_url}
+- Processing date: {conversion.created_at.strftime('%Y-%m-%d %H:%M UTC')}
+- Content preserved with original formatting
+- Generated by [ctxt.help](https://ctxt.help) - The LLM Context Builder
+
+*This content is optimized for AI and LLM consumption while preserving the original article structure and information.*
 """
     
     # Set appropriate headers for crawlers
@@ -361,6 +433,564 @@ async def serve_html_content(conversion: Conversion, request: Request) -> HTMLRe
         }
     )
 
+async def serve_context_html_content(context_stack: ContextStack, request: Request) -> HTMLResponse:
+    """Serve rich HTML content for context stacks"""
+    
+    # Format publish date
+    publish_date = context_stack.created_at.strftime('%B %d, %Y')
+    
+    # Create meta description from the description or first block
+    meta_description = context_stack.description
+    if not meta_description and context_stack.blocks:
+        # Get first text from first block
+        first_block = context_stack.blocks[0] if isinstance(context_stack.blocks, list) else None
+        if first_block and isinstance(first_block, dict) and 'content' in first_block:
+            meta_description = first_block['content'][:155] + "..."
+    
+    if not meta_description:
+        meta_description = f"Context stack '{context_stack.name}' - AI-ready content collection"
+    
+    if len(meta_description) > 155:
+        meta_description = meta_description[:152] + "..."
+    
+    # Calculate total word count from blocks
+    total_word_count = 0
+    content_html = ""
+    
+    if context_stack.blocks and isinstance(context_stack.blocks, list):
+        for i, block in enumerate(context_stack.blocks):
+            if isinstance(block, dict):
+                block_title = block.get('title', f'Block {i+1}')
+                block_content = block.get('content', '')
+                block_type = block.get('type', 'text')
+                
+                # Count words
+                total_word_count += len(block_content.split())
+                
+                # Add block HTML
+                content_html += f'''
+                <div class="mb-8 p-6 bg-gray-50 rounded-lg border">
+                    <h3 class="text-xl font-semibold mb-4 text-gray-800">{block_title}</h3>
+                    <div class="content-block prose prose-lg max-w-none">
+                        <div id="block-content-{i}">{block_content}</div>
+                    </div>
+                </div>
+                '''
+    
+    estimated_read_time = max(1, total_word_count // 200)
+    
+    # Generate structured data for SEO
+    structured_data = {
+        "@context": "https://schema.org",
+        "@type": "Collection",
+        "name": context_stack.name,
+        "description": meta_description,
+        "url": f"https://ctxt.help/context/{str(context_stack.id)}",
+        "dateCreated": context_stack.created_at.isoformat(),
+        "dateModified": context_stack.updated_at.isoformat() if context_stack.updated_at else context_stack.created_at.isoformat(),
+        "creator": {
+            "@type": "Organization",
+            "name": "ctxt.help"
+        },
+        "publisher": {
+            "@type": "Organization", 
+            "name": "ctxt.help",
+            "url": "https://ctxt.help"
+        },
+        "numberOfItems": len(context_stack.blocks) if context_stack.blocks else 0,
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": f"https://ctxt.help/context/{str(context_stack.id)}"
+        }
+    }
+    structured_data_json = json.dumps(structured_data)
+    
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{context_stack.name} | ctxt.help</title>
+    
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="{meta_description}">
+    <meta name="keywords" content="context stack, AI, LLM, collection, ctxt.help">
+    <meta name="author" content="ctxt.help">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://ctxt.help/context/{str(context_stack.id)}">
+    
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="{context_stack.name}">
+    <meta property="og:description" content="{meta_description}">
+    <meta property="og:url" content="https://ctxt.help/context/{str(context_stack.id)}">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="ctxt.help">
+    <meta property="article:published_time" content="{context_stack.created_at.isoformat()}">
+    <meta property="article:author" content="ctxt.help">
+    
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{context_stack.name}">
+    <meta name="twitter:description" content="{meta_description}">
+    <meta name="twitter:url" content="https://ctxt.help/context/{str(context_stack.id)}">
+    
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {structured_data_json}
+    </script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Styles -->
+    <style>
+        .content-container {{
+            max-width: 1000px;
+            margin: 0 auto;
+            line-height: 1.7;
+        }}
+        .content-container h1, .content-container h2, .content-container h3 {{
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }}
+        .content-container p {{
+            margin-bottom: 1rem;
+        }}
+        .content-container ul, .content-container ol {{
+            margin-bottom: 1rem;
+            padding-left: 1.5rem;
+        }}
+        .content-container blockquote {{
+            border-left: 4px solid #3b82f6;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            font-style: italic;
+            background-color: #f8fafc;
+        }}
+        .content-container code {{
+            background-color: #f1f5f9;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-family: 'Courier New', monospace;
+        }}
+        .content-container pre {{
+            background-color: #1e293b;
+            color: #f1f5f9;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+        }}
+        .content-container pre code {{
+            background-color: transparent;
+            padding: 0;
+        }}
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="bg-white shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-between">
+                <a href="https://ctxt.help" class="text-2xl font-bold text-blue-600">ctxt.help</a>
+                <div class="text-sm text-gray-600">
+                    <span>{context_stack.use_count} uses</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-6xl mx-auto px-4 py-8">
+        <article class="bg-white rounded-lg shadow-sm p-8">
+            <!-- Article Header -->
+            <header class="mb-8 pb-6 border-b border-gray-200">
+                <h1 class="text-4xl font-bold text-gray-900 mb-4">{context_stack.name}</h1>
+                
+                <div class="flex flex-wrap items-center gap-4 text-sm text-gray-600 mb-4">
+                    <span>📅 {publish_date}</span>
+                    <span>📚 {len(context_stack.blocks) if context_stack.blocks else 0} blocks</span>
+                    <span>📖 ~{total_word_count} words</span>
+                    <span>⏱️ {estimated_read_time} min read</span>
+                    {f'<span>🏷️ Template</span>' if context_stack.is_template else ''}
+                </div>
+                
+                {f'<div class="mb-4"><p class="text-gray-700">{context_stack.description}</p></div>' if context_stack.description else ''}
+                
+                <div class="flex flex-wrap gap-2">
+                    <button onclick="copyToClipboard()" 
+                            class="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors">
+                        📋 Copy Link
+                    </button>
+                    <a href="/context/{str(context_stack.id)}.md"
+                       class="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                        📄 Markdown
+                    </a>
+                    <a href="/context/{str(context_stack.id)}.xml"
+                       class="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                        🔗 XML
+                    </a>
+                    <button onclick="shareContent()" 
+                            class="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                        📤 Share
+                    </button>
+                </div>
+            </header>
+
+            <!-- Context Stack Content -->
+            <div class="content-container">
+                {content_html}
+            </div>
+            
+            <!-- Article Footer -->
+            <footer class="mt-12 pt-8 border-t border-gray-200">
+                <div class="text-sm text-gray-600">
+                    <p>This context stack was created using <a href="https://ctxt.help" class="text-blue-600 hover:underline">ctxt.help</a> - The LLM Context Builder.</p>
+                    <p class="mt-2">Permanent link: <span class="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/context/{str(context_stack.id)}</span></p>
+                </div>
+            </footer>
+        </article>
+        
+        <!-- Call to Action -->
+        <div class="mt-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg p-6 text-white text-center">
+            <h3 class="text-xl font-bold mb-2">Create Your Own Context Stacks</h3>
+            <p class="mb-4">Build comprehensive context collections perfect for AI and LLM workflows</p>
+            <a href="https://ctxt.help" class="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
+                Try ctxt.help Free
+            </a>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-gray-200 mt-16">
+        <div class="max-w-6xl mx-auto px-4 py-8">
+            <div class="text-center text-sm text-gray-600">
+                <p>&copy; 2025 ctxt.help - The LLM Context Builder</p>
+                <div class="mt-2 space-x-4">
+                    <a href="https://ctxt.help" class="hover:text-blue-600">Home</a>
+                    <a href="https://ctxt.help/about" class="hover:text-blue-600">About</a>
+                    <a href="https://ctxt.help/privacy" class="hover:text-blue-600">Privacy</a>
+                    <a href="https://ctxt.help/terms" class="hover:text-blue-600">Terms</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script>
+        function copyToClipboard() {{
+            navigator.clipboard.writeText(window.location.href).then(() => {{
+                alert('Link copied to clipboard!');
+            }}).catch(() => {{
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = window.location.href;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('Link copied to clipboard!');
+            }});
+        }}
+        
+        function shareContent() {{
+            if (navigator.share) {{
+                navigator.share({{
+                    title: document.title,
+                    url: window.location.href
+                }});
+            }} else {{
+                copyToClipboard();
+            }}
+        }}
+        
+        // Simple markdown to HTML conversion for block content
+        document.addEventListener('DOMContentLoaded', function() {{
+            const blocks = document.querySelectorAll('[id^="block-content-"]');
+            blocks.forEach(block => {{
+                let html = block.innerHTML;
+                
+                // Convert markdown headers
+                html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+                html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+                html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+                
+                // Convert bold
+                html = html.replace(/\\*\\*(.*?)\\*\\*/gim, '<strong>$1</strong>');
+                
+                // Convert italic
+                html = html.replace(/\\*(.*?)\\*/gim, '<em>$1</em>');
+                
+                // Convert links
+                html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/gim, '<a href="$2" class="text-blue-600 hover:underline" target="_blank" rel="noopener">$1</a>');
+                
+                // Convert line breaks to paragraphs
+                html = html.replace(/\\n\\n/gim, '</p><p>');
+                html = '<p>' + html + '</p>';
+                
+                block.innerHTML = html;
+            }});
+        }});
+    </script>
+</body>
+</html>"""
+    
+    return HTMLResponse(
+        content=html_content,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Robots-Tag": "index, follow"
+        }
+    )
+
+async def serve_context_markdown_content(context_stack: ContextStack, request: Request) -> PlainTextResponse:
+    """Serve raw markdown content for context stacks"""
+    
+    # Create markdown content
+    markdown_content = f"""# {context_stack.name}
+
+**Created:** {context_stack.created_at.strftime('%Y-%m-%d')}
+**Last Modified:** {context_stack.updated_at.strftime('%Y-%m-%d') if context_stack.updated_at else context_stack.created_at.strftime('%Y-%m-%d')}
+**Blocks:** {len(context_stack.blocks) if context_stack.blocks else 0}
+**Uses:** {context_stack.use_count}
+{f"**Template:** Yes" if context_stack.is_template else ""}
+
+{f"**Description:** {context_stack.description}" if context_stack.description else ""}
+
+---
+
+"""
+
+    # Add each block as a section
+    if context_stack.blocks and isinstance(context_stack.blocks, list):
+        for i, block in enumerate(context_stack.blocks):
+            if isinstance(block, dict):
+                block_title = block.get('title', f'Block {i+1}')
+                block_content = block.get('content', '')
+                block_type = block.get('type', 'text')
+                
+                markdown_content += f"""## {block_title}
+
+{block_content}
+
+---
+
+"""
+
+    markdown_content += f"""
+*Context stack created with ctxt.help - The LLM Context Builder*
+*Permanent link: https://ctxt.help/context/{str(context_stack.id)}*
+"""
+    
+    # Set appropriate headers for crawlers
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "public, max-age=3600",
+        "X-Robots-Tag": "index, follow",
+        "X-Content-Type": "markdown"
+    }
+    
+    return PlainTextResponse(
+        content=markdown_content,
+        headers=headers,
+        media_type="text/plain"
+    )
+
+async def serve_context_xml_content(context_stack: ContextStack, request: Request) -> Response:
+    """Serve XML structured content for context stacks"""
+    
+    # Create XML structure
+    root = Element('contextStack')
+    root.set('id', str(context_stack.id))
+    root.set('created', context_stack.created_at.isoformat())
+    root.set('modified', context_stack.updated_at.isoformat() if context_stack.updated_at else context_stack.created_at.isoformat())
+    
+    # Add metadata
+    metadata = SubElement(root, 'metadata')
+    SubElement(metadata, 'name').text = context_stack.name
+    if context_stack.description:
+        SubElement(metadata, 'description').text = context_stack.description
+    SubElement(metadata, 'useCount').text = str(context_stack.use_count)
+    SubElement(metadata, 'isTemplate').text = str(context_stack.is_template).lower()
+    SubElement(metadata, 'isPublic').text = str(context_stack.is_public).lower()
+    SubElement(metadata, 'blockCount').text = str(len(context_stack.blocks) if context_stack.blocks else 0)
+    
+    # Add blocks
+    blocks_element = SubElement(root, 'blocks')
+    if context_stack.blocks and isinstance(context_stack.blocks, list):
+        for i, block in enumerate(context_stack.blocks):
+            if isinstance(block, dict):
+                block_element = SubElement(blocks_element, 'block')
+                block_element.set('index', str(i))
+                block_element.set('type', block.get('type', 'text'))
+                
+                SubElement(block_element, 'title').text = block.get('title', f'Block {i+1}')
+                
+                content_element = SubElement(block_element, 'content')
+                content_element.text = block.get('content', '')
+                
+                # Add word count
+                word_count = len(block.get('content', '').split())
+                SubElement(block_element, 'wordCount').text = str(word_count)
+    
+    # Add source info
+    source = SubElement(root, 'source')
+    SubElement(source, 'tool').text = 'ctxt.help'
+    SubElement(source, 'url').text = f'https://ctxt.help/context/{str(context_stack.id)}'
+    SubElement(source, 'description').text = 'The LLM Context Builder'
+    
+    # Convert to XML string
+    xml_string = tostring(root, encoding='unicode', method='xml')
+    
+    # Add XML declaration and pretty formatting
+    formatted_xml = f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_string}'
+    
+    return Response(
+        content=formatted_xml,
+        media_type="application/xml",
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "Content-Type": "application/xml; charset=utf-8",
+            "X-Robots-Tag": "index, follow"
+        }
+    )
+
+@router.get("/context/{stack_id:uuid}")
+async def get_context_stack_page(
+    stack_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serve context stack as SEO-optimized page
+    """
+    try:
+        # Parse UUID
+        stack_uuid = uuid.UUID(stack_id)
+        
+        # Get context stack
+        context_stack = db.query(ContextStack).filter(
+            and_(
+                ContextStack.id == stack_uuid,
+                ContextStack.is_public == True
+            )
+        ).first()
+        
+        if not context_stack:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Context stack not found"
+            )
+        
+        # Increment use count
+        context_stack.use_count += 1
+        context_stack.last_used_at = func.now()
+        db.commit()
+        
+        # Check if bot/crawler for content type decision
+        user_agent = request.headers.get("user-agent")
+        if bot_detector.should_serve_markdown(user_agent):
+            bot_detector.log_bot_access(user_agent, str(context_stack.id), True)
+            return await serve_context_markdown_content(context_stack, request)
+        else:
+            return await serve_context_html_content(context_stack, request)
+            
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid context stack ID"
+        )
+    except Exception as e:
+        logger.error(f"Error serving context stack {stack_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load context stack"
+        )
+
+@router.get("/context/{stack_id:uuid}.md")
+async def get_context_stack_markdown(
+    stack_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serve context stack as markdown
+    """
+    try:
+        # Parse UUID
+        stack_uuid = uuid.UUID(stack_id)
+        
+        # Get context stack
+        context_stack = db.query(ContextStack).filter(
+            and_(
+                ContextStack.id == stack_uuid,
+                ContextStack.is_public == True
+            )
+        ).first()
+        
+        if not context_stack:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Context stack not found"
+            )
+        
+        return await serve_context_markdown_content(context_stack, request)
+        
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid context stack ID"
+        )
+    except Exception as e:
+        logger.error(f"Error serving context stack markdown {stack_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load context stack"
+        )
+
+@router.get("/context/{stack_id:uuid}.xml")
+async def get_context_stack_xml(
+    stack_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serve context stack as XML
+    """
+    try:
+        # Parse UUID
+        stack_uuid = uuid.UUID(stack_id)
+        
+        # Get context stack
+        context_stack = db.query(ContextStack).filter(
+            and_(
+                ContextStack.id == stack_uuid,
+                ContextStack.is_public == True
+            )
+        ).first()
+        
+        if not context_stack:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Context stack not found"
+            )
+        
+        return await serve_context_xml_content(context_stack, request)
+        
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid context stack ID"
+        )
+    except Exception as e:
+        logger.error(f"Error serving context stack XML {stack_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load context stack"
+        )
+
 @router.get("/sitemap.xml")
 async def get_sitemap(db: Session = Depends(get_db)):
     """
@@ -376,7 +1006,7 @@ async def get_sitemap(db: Session = Depends(get_db)):
         SubElement(homepage_url, 'loc').text = 'https://ctxt.help/'
         SubElement(homepage_url, 'changefreq').text = 'daily'
         SubElement(homepage_url, 'priority').text = '1.0'
-        SubElement(homepage_url, 'lastmod').text = datetime.utcnow().strftime('%Y-%m-%d')
+        SubElement(homepage_url, 'lastmod').text = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
         # Get all public and indexed conversions
         conversions = db.query(Conversion).filter(
@@ -391,26 +1021,12 @@ async def get_sitemap(db: Session = Depends(get_db)):
             # Calculate priority based on view count and recency
             priority = calculate_conversion_priority(conversion)
             
-            # Add /read/{slug} SEO route
-            read_url = SubElement(urlset, 'url')
-            SubElement(read_url, 'loc').text = f'https://ctxt.help/read/{conversion.slug}'
-            SubElement(read_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
-            SubElement(read_url, 'changefreq').text = 'weekly'
-            SubElement(read_url, 'priority').text = f'{priority:.1f}'
-            
-            # Add /page/{slug} route
+            # Add /page/{slug} route as the canonical URL
             page_url = SubElement(urlset, 'url')
             SubElement(page_url, 'loc').text = f'https://ctxt.help/page/{conversion.slug}'
             SubElement(page_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
             SubElement(page_url, 'changefreq').text = 'weekly'
             SubElement(page_url, 'priority').text = f'{priority:.1f}'
-            
-            # Add /page/{slug}/markdown route
-            markdown_url = SubElement(urlset, 'url')
-            SubElement(markdown_url, 'loc').text = f'https://ctxt.help/page/{conversion.slug}/markdown'
-            SubElement(markdown_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
-            SubElement(markdown_url, 'changefreq').text = 'weekly'
-            SubElement(markdown_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
         
         # Get all public context stacks
         context_stacks = db.query(ContextStack).filter(
@@ -422,26 +1038,12 @@ async def get_sitemap(db: Session = Depends(get_db)):
             # Calculate priority based on usage
             priority = calculate_context_stack_priority(stack)
             
-            # Add /context/{id} route
+            # Add /context/{id} route as the canonical URL
             context_url = SubElement(urlset, 'url')
             SubElement(context_url, 'loc').text = f'https://ctxt.help/context/{stack.id}'
             SubElement(context_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
             SubElement(context_url, 'changefreq').text = 'weekly'
             SubElement(context_url, 'priority').text = f'{priority:.1f}'
-            
-            # Add /context/{id}/markdown route
-            context_md_url = SubElement(urlset, 'url')
-            SubElement(context_md_url, 'loc').text = f'https://ctxt.help/context/{stack.id}/markdown'
-            SubElement(context_md_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
-            SubElement(context_md_url, 'changefreq').text = 'weekly'
-            SubElement(context_md_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
-            
-            # Add /context/{id}/xml route
-            context_xml_url = SubElement(urlset, 'url')
-            SubElement(context_xml_url, 'loc').text = f'https://ctxt.help/context/{stack.id}/xml'
-            SubElement(context_xml_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
-            SubElement(context_xml_url, 'changefreq').text = 'weekly'
-            SubElement(context_xml_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
         
         # Convert to XML string
         xml_string = tostring(urlset, encoding='unicode', method='xml')
@@ -483,7 +1085,7 @@ def calculate_conversion_priority(conversion: Conversion) -> float:
     
     # Boost for recent content
     if conversion.created_at:
-        days_old = (datetime.utcnow() - conversion.created_at).days
+        days_old = (datetime.now(timezone.utc) - conversion.created_at).days
         if days_old < 30:
             priority += 0.1
         elif days_old < 90:
@@ -514,7 +1116,7 @@ def calculate_context_stack_priority(stack: ContextStack) -> float:
     
     # Boost for recent activity
     if stack.last_used_at:
-        days_since_use = (datetime.utcnow() - stack.last_used_at).days
+        days_since_use = (datetime.now(timezone.utc) - stack.last_used_at).days
         if days_since_use < 7:
             priority += 0.1
         elif days_since_use < 30:
@@ -526,26 +1128,86 @@ def calculate_context_stack_priority(stack: ContextStack) -> float:
 @router.get("/robots.txt")
 async def get_robots_txt():
     """
-    Generate robots.txt file that references the sitemap
+    Generate robots.txt file that references the sitemap with AI crawler controls
     """
-    robots_content = f"""User-agent: *
+    robots_content = f"""# Robots.txt for ctxt.help
+# Updated with AI crawler controls
+
+# Search engines - full access
+User-agent: Googlebot
 Allow: /
+Crawl-delay: 1
+
+User-agent: Bingbot
+Allow: /
+Crawl-delay: 1
+
+# AI Training crawlers - controlled access
+User-agent: GPTBot
+Allow: /page/
+Allow: /context/
+Disallow: /api/
+Disallow: /auth/
+Crawl-delay: 2
+
+User-agent: ChatGPT-User
+Allow: /page/
+Allow: /context/
+Crawl-delay: 1
+
+User-agent: ClaudeBot
+Allow: /page/
+Allow: /context/
+Crawl-delay: 2
+
+User-agent: PerplexityBot
+Allow: /page/
+Allow: /context/
+Crawl-delay: 2
+
+User-agent: Google-Extended
+Allow: /page/
+Allow: /context/
+Crawl-delay: 2
+
+User-agent: Cohere-AI
+Allow: /page/
+Allow: /context/
+Crawl-delay: 3
+
+User-agent: Bytespider
+Allow: /page/
+Allow: /context/
+Crawl-delay: 5
+
+# SEO tools - limited access
+User-agent: AhrefsBot
+Allow: /page/
+Allow: /context/
+Crawl-delay: 3
+
+User-agent: SemrushBot
+Allow: /page/
+Allow: /context/
+Crawl-delay: 3
+
+# All other agents
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /auth/
+Crawl-delay: 1
 
 # Sitemap
 Sitemap: https://ctxt.help/sitemap.xml
 
-# Crawl-delay for politeness
-Crawl-delay: 1
+# Allow specific content paths for AI consumption
+Allow: /page/*.md
+Allow: /context/*.md
 
-# Allow specific paths
-Allow: /read/
-Allow: /page/
-Allow: /context/
-
-# Disallow admin and api paths
-Disallow: /api/
-Disallow: /admin/
-Disallow: /auth/
+# Additional directives
+Clean-param: utm_source&utm_medium&utm_campaign
 """
     
     return Response(

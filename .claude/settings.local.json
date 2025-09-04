@@ -20,7 +20,8 @@
       "mcp__playwright__browser_drag",
       "mcp__playwright__browser_select_option",
       "mcp__playwright__browser_handle_dialog",
-      "mcp__playwright__browser_evaluate"
+      "mcp__playwright__browser_evaluate",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

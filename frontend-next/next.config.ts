@@ -14,6 +14,14 @@ const nextConfig: NextConfig = {
         source: '/api/:path*',
         destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/:path*`,
       },
+      {
+        source: '/sitemap.xml',
+        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/sitemap.xml`,
+      },
+      {
+        source: '/robots.txt',
+        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/robots.txt`,
+      },
     ];
   },
   // Enable static optimization for better performance

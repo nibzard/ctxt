@@ -31,11 +31,24 @@ class BotDetectionService:
         # AI/LLM crawlers
         r'gptbot',
         r'chatgpt-user',
+        r'oai-searchbot',
         r'claudebot',
+        r'claude-searchbot', 
         r'perplexitybot',
         r'anthropic-ai',
+        r'claude-web',
         r'openai',
         r'cohere-ai',
+        r'cohere-training-data-crawler',
+        r'google-extended',
+        r'google-cloudvertexbot',
+        r'meta-externalagent',
+        r'bytespider',
+        r'petalbot',
+        r'amazonbot',
+        r'youbot',
+        r'diffbot',
+        r'applebot-extended',
         
         # Generic bot patterns
         r'bot\b',
@@ -75,13 +88,36 @@ class BotDetectionService:
     
     # Specific bot user agents for precise matching
     KNOWN_BOTS = {
+        # Search engines
         'Googlebot': ['Googlebot/', 'GoogleOther'],
+        'Google-Extended': ['Google-Extended/'],
+        'Google-CloudVertexBot': ['Google-CloudVertexBot/'],
         'BingBot': ['bingbot/', 'BingPreview/'],
-        'AhrefsBot': ['AhrefsBot/'],
+        
+        # OpenAI
         'GPTBot': ['GPTBot/'],
-        'ChatGPT': ['ChatGPT-User/'],
+        'ChatGPT-User': ['ChatGPT-User/', 'ChatGPT-User/2.0'],
+        'OAI-SearchBot': ['OAI-SearchBot/'],
+        
+        # Anthropic
         'ClaudeBot': ['ClaudeBot/'],
+        'Claude-SearchBot': ['Claude-SearchBot/'],
+        'Anthropic-AI': ['anthropic-ai'],
+        'Claude-Web': ['Claude-Web'],
+        
+        # Other AI companies
         'PerplexityBot': ['PerplexityBot/'],
+        'Cohere-AI': ['cohere-ai', 'cohere-training-data-crawler'],
+        'Meta-ExternalAgent': ['meta-externalagent', 'facebookexternalhit'],
+        'ByteSpider': ['Bytespider/'],
+        'PetalBot': ['PetalBot/'],
+        'Amazonbot': ['Amazonbot/'],
+        'YouBot': ['YouBot/'],
+        'Diffbot': ['Diffbot/'],
+        'AppleBot-Extended': ['Applebot-Extended/'],
+        
+        # SEO tools
+        'AhrefsBot': ['AhrefsBot/'],
         'SemrushBot': ['SemrushBot/'],
         'MJ12Bot': ['MJ12bot/'],
         'DotBot': ['DotBot/'],
@@ -182,7 +218,11 @@ class BotDetectionService:
             return 'search_engine'
         elif any(term in bot_lower for term in ['ahrefs', 'semrush', 'majestic', 'mj12', 'spyfu', 'serpstat']):
             return 'seo_tool'
-        elif any(term in bot_lower for term in ['gpt', 'chatgpt', 'claude', 'perplexity', 'openai', 'anthropic', 'cohere']):
+        elif any(term in bot_lower for term in [
+            'gpt', 'chatgpt', 'oai-search', 'claude', 'perplexity', 'openai', 'anthropic', 
+            'cohere', 'meta-external', 'bytespider', 'petalbot', 'amazonbot', 'youbot', 
+            'diffbot', 'applebot-extended', 'google-extended', 'google-cloudvertex'
+        ]):
             return 'ai_crawler'
         elif any(term in bot_lower for term in ['facebook', 'twitter', 'linkedin', 'whatsapp', 'telegram', 'slack', 'discord']):
             return 'social_media'
