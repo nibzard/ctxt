@@ -1,4 +1,4 @@
-// ABOUTME: SSR page component for serving SEO-optimized conversion pages
+// ABOUTME: SSR page component for serving single page conversions with SEO optimization
 // ABOUTME: Handles bot detection and serves markdown vs HTML based on user agent
 
 import { notFound, redirect } from 'next/navigation';
@@ -6,14 +6,13 @@ import { headers } from 'next/headers';
 import { botDetector } from '@/lib/bot-detection';
 import { Conversion } from '@/types/api';
 import { isContextStack } from '@/utils/contextParser';
-import { Layers } from 'lucide-react';
 
-interface ConversionPageProps {
+interface PageConversionProps {
   params: Promise<{ slug: string }>;
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
-export default async function ConversionPage({ params, searchParams }: ConversionPageProps) {
+export default async function PageConversion({ params, searchParams }: PageConversionProps) {
   const { slug } = await params;
   const search = await searchParams || {};
   
@@ -22,6 +21,12 @@ export default async function ConversionPage({ params, searchParams }: Conversio
   
   if (!conversion) {
     notFound();
+  }
+
+  // Ensure this is a single page conversion, not a context stack
+  if (isContextStack(conversion)) {
+    // Redirect context stacks to the /context/ route
+    redirect(`/context/${slug}`);
   }
 
   // Check backend health and increment view count
@@ -51,12 +56,12 @@ export default async function ConversionPage({ params, searchParams }: Conversio
 
   // Redirect to markdown route if explicitly requested
   if (requestsMarkdown) {
-    redirect(`/read/${slug}/markdown`);
+    redirect(`/page/${slug}.md`);
   }
   
-  // For bots, we'll handle them differently - they should get the /markdown route too
+  // For bots, we'll handle them differently - they should get the .md route too
   if (botDetector.shouldServeMarkdown(userAgent)) {
-    redirect(`/read/${slug}/markdown`);
+    redirect(`/page/${slug}.md`);
   }
 
   // Serve HTML for humans
@@ -106,27 +111,13 @@ export default async function ConversionPage({ params, searchParams }: Conversio
             </div>
             
             <div className="flex flex-wrap gap-2">
-              {!isContextStack(conversion) ? (
-                <a href={conversion.source_url} 
-                   className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors"
-                   target="_blank" rel="noopener">
-                  🔗 View Original
-                </a>
-              ) : (
-                <span className="inline-flex items-center px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs">
-                  📚 Context Stack
-                </span>
-              )}
+              <a href={conversion.source_url} 
+                 className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors"
+                 target="_blank" rel="noopener">
+                🔗 View Original
+              </a>
               
-              {isContextStack(conversion) && (
-                <a href={`/?remix=${conversion.slug}`}
-                   className="inline-flex items-center px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs hover:bg-green-200 transition-colors">
-                  <Layers className="w-3 h-3 mr-1" />
-                  Remix this Context
-                </a>
-              )}
-              
-              <a href={`/read/${conversion.slug}/markdown`}
+              <a href={`/page/${conversion.slug}.md`}
                  className="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
                 📄 View as Markdown
               </a>
@@ -140,7 +131,7 @@ export default async function ConversionPage({ params, searchParams }: Conversio
           <footer className="mt-12 pt-8 border-t border-gray-200">
             <div className="text-sm text-gray-600">
               <p>This content was converted from <a href={conversion.source_url} className="text-blue-600 hover:underline" target="_blank" rel="noopener">{conversion.source_url}</a> using <a href="/" className="text-blue-600 hover:underline">ctxt.help</a> - The LLM Context Builder.</p>
-              <p className="mt-2">Permanent link: <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/read/{conversion.slug}</span></p>
+              <p className="mt-2">Permanent link: <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/page/{conversion.slug}</span></p>
             </div>
           </footer>
         </article>
@@ -236,7 +227,6 @@ async function incrementViewCount(slug: string): Promise<void> {
   }
 }
 
-
 function formatHtmlContent(content: string): string {
   // Simple markdown to HTML conversion
   let html = content;
@@ -260,7 +250,7 @@ function formatHtmlContent(content: string): string {
   return html;
 }
 
-export async function generateMetadata({ params }: ConversionPageProps) {
+export async function generateMetadata({ params }: PageConversionProps) {
   const { slug } = await params;
   const conversion = await getConversion(slug);
   
@@ -278,7 +268,7 @@ export async function generateMetadata({ params }: ConversionPageProps) {
     openGraph: {
       title: conversion.title,
       description: metaDescription,
-      url: `https://ctxt.help/read/${conversion.slug}`,
+      url: `https://ctxt.help/page/${conversion.slug}`,
       type: 'article',
       publishedTime: conversion.created_at,
       authors: ['ctxt.help'],
@@ -288,6 +278,6 @@ export async function generateMetadata({ params }: ConversionPageProps) {
       title: conversion.title,
       description: metaDescription,
     },
-    canonical: `https://ctxt.help/read/${conversion.slug}`,
+    canonical: `https://ctxt.help/page/${conversion.slug}`,
   };
 }

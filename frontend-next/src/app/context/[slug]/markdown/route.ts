@@ -1,8 +1,9 @@
-// ABOUTME: Route handler for serving markdown versions of conversion pages
+// ABOUTME: Route handler for serving markdown versions of context stack pages
 // ABOUTME: Provides explicit markdown endpoint for user access
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Conversion } from '@/types/api';
+import { isContextStack } from '@/utils/contextParser';
 
 export async function GET(
   request: NextRequest,
@@ -15,9 +16,9 @@ export async function GET(
   
   if (!conversion) {
     // Return a helpful markdown response for 404
-    const notFoundMarkdown = `# Conversion Not Found
+    const notFoundMarkdown = `# Context Stack Not Found
 
-The requested conversion \`${slug}\` could not be found.
+The requested context stack \`${slug}\` could not be found.
 
 This could happen if:
 - The link is incorrect or expired
@@ -37,6 +38,12 @@ Please check the URL or try again later.
         'Cache-Control': 'no-cache',
       },
     });
+  }
+
+  // Ensure this is a context stack, not a single page conversion
+  if (!isContextStack(conversion)) {
+    // Redirect single pages to the /page/ route
+    return NextResponse.redirect(new URL(`/page/${slug}.md`, request.url), 301);
   }
 
   // Increment view count via API (fire-and-forget)
@@ -110,13 +117,12 @@ async function incrementViewCount(slug: string): Promise<void> {
 
 function formatMarkdownContent(conversion: Conversion, isExplicitRequest: boolean = false): string {
   const viewAsHtmlLink = isExplicitRequest ? 
-    `*View as HTML: https://ctxt.help/read/${conversion.slug}*\n` : '';
+    `*View as HTML: https://ctxt.help/context/${conversion.slug}*\n*View as XML: https://ctxt.help/context/${conversion.slug}.xml*\n` : '';
   
   return `# ${conversion.title}
 
-**Source:** ${conversion.source_url}
-**Domain:** ${conversion.domain}
-**Published:** ${new Date(conversion.created_at).toISOString().split('T')[0]}
+**Type:** Context Stack
+**Created:** ${new Date(conversion.created_at).toISOString().split('T')[0]}
 **Word Count:** ${conversion.word_count}
 **Reading Time:** ${Math.max(1, Math.floor(conversion.word_count / 200))} minutes
 
@@ -125,7 +131,9 @@ function formatMarkdownContent(conversion: Conversion, isExplicitRequest: boolea
 ${conversion.content}
 
 ---
-*Converted by ctxt.help - The LLM Context Builder*
-*Permanent link: https://ctxt.help/read/${conversion.slug}*
+*Context Stack created by ctxt.help - The LLM Context Builder*
+*Permanent link: https://ctxt.help/context/${conversion.slug}*
+*Markdown link: https://ctxt.help/context/${conversion.slug}.md*
+*XML link: https://ctxt.help/context/${conversion.slug}.xml*
 ${viewAsHtmlLink}`;
 }

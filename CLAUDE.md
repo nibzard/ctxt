@@ -71,7 +71,14 @@ alembic downgrade -1                              # Rollback one migration
 
 ### Request Flow
 1. **Client-Side Conversion**: Frontend uses Jina Reader API for URL-to-markdown conversion
-2. **SEO Page Generation**: Backend creates permanent pages at `/read/{slug}` for each conversion
+2. **SEO Page Generation**: Backend creates permanent pages with semantic routing for better UX:
+   - **Single Pages**: `/page/{slug}` (converted URLs)
+     - HTML: `/page/{slug}` (default)
+     - Markdown: `/page/{slug}.md` (clean text format)
+   - **Context Stacks**: `/context/{slug}` (multi-block contexts)  
+     - HTML: `/context/{slug}` (default)
+     - Markdown: `/context/{slug}.md` (clean text format)
+     - XML: `/context/{slug}.xml` (structured format)
 3. **Context Building**: Users can stack multiple conversions with drag-and-drop reordering
 4. **MCP Integration**: AI tools access conversions through the MCP server
 

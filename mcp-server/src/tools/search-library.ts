@@ -49,7 +49,10 @@ export const searchLibraryTool = {
       
       // Format results
       const formattedResults = searchResults.items.map((item: any, index: number) => {
-        const readUrl = `https://ctxt.help/read/${item.slug}`;
+        // Determine if it's a context stack and use appropriate route
+        const isContextStack = item.source_url === 'context://stack';
+        const routeType = isContextStack ? 'context' : 'page';
+        const readUrl = `https://ctxt.help/${routeType}/${item.slug}`;
         const createdDate = new Date(item.created_at).toLocaleDateString();
         
         return [

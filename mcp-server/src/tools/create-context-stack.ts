@@ -90,7 +90,7 @@ ${conv.content.replace(/^/gm, '    ')}
             word_count: conv.word_count,
             reading_time: conv.reading_time,
             content: conv.content,
-            permanent_url: `https://ctxt.help/read/${conv.slug}`
+            permanent_url: `https://ctxt.help/page/${conv.slug}`
           })),
           metadata: {
             total_sources: conversions.length,
@@ -121,7 +121,7 @@ ${conv.content.replace(/^/gm, '    ')}
           `**URL:** ${conv.url}`,
           `**Domain:** ${conv.domain || 'Unknown'}`,
           `**Words:** ${conv.word_count || 0}`,
-          `**Permanent Link:** https://ctxt.help/read/${conv.slug}`,
+          `**Permanent Link:** https://ctxt.help/page/${conv.slug}`,
           '',
           conv.content,
           '',
@@ -190,7 +190,7 @@ ${conv.content.replace(/^/gm, '    ')}
             url: conv.url,
             title: conv.title,
             domain: conv.domain,
-            permanent_url: `https://ctxt.help/read/${conv.slug}`
+            permanent_url: `https://ctxt.help/page/${conv.slug}`
           }))
         }
       };

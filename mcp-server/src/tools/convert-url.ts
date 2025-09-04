@@ -75,7 +75,7 @@ ${conversion.content}
           domain: conversion.domain,
           word_count: conversion.word_count,
           reading_time: conversion.reading_time,
-          permanent_url: `https://ctxt.help/read/${conversion.slug}`,
+          permanent_url: `https://ctxt.help/page/${conversion.slug}`,
           format: input.format || 'markdown'
         }
       };

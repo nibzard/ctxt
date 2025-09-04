@@ -228,7 +228,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       setHasAutoSaved(true);
       setIsRemixMode(false);
       
-      const permalink = apiService.getSEOPageUrl(savedContext.slug);
+      const permalink = apiService.getSEOPageUrl(savedContext.slug, true); // Context stacks always use true
       setAutoSaveNotification(`Automatically created new context: ${permalink}`);
       setTimeout(() => setAutoSaveNotification(''), 8000);
       
@@ -466,7 +466,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     }
     
     if (targetSlug) {
-      const permalink = apiService.getSEOPageUrl(targetSlug);
+      const permalink = apiService.getSEOPageUrl(targetSlug, true); // Context stacks always use true
       try {
         await navigator.clipboard.writeText(permalink);
         setPermalinkCopied(true);

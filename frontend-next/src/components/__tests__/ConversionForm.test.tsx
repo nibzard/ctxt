@@ -52,7 +52,7 @@ describe('ConversionForm', () => {
     })
     
     mockApiService.validateUrl.mockReturnValue(true)
-    mockApiService.getSEOPageUrl.mockReturnValue('https://example.com/read/test-slug')
+    mockApiService.getSEOPageUrl.mockReturnValue('https://example.com/page/test-slug')
   })
 
   it('renders the conversion form', () => {
@@ -223,6 +223,6 @@ describe('ConversionForm', () => {
     const copyButton = screen.getByTitle(/copy link/i)
     await user.click(copyButton)
     
-    expect(mockCopy).toHaveBeenCalledWith('https://example.com/read/test-slug')
+    expect(mockCopy).toHaveBeenCalledWith('https://example.com/page/test-slug')
   })
 })

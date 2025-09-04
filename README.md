@@ -94,7 +94,14 @@ cd mcp-server && npm install && npm run build && npm run dev
 - **API Documentation**: http://localhost:8000/docs
 - **MCP Server**: http://localhost:3001
 
-**SEO Pages**: Now served from http://localhost:3000/read/{slug} with unified routing!
+**SEO Pages**: Now served with semantic routing for better UX!
+- **Single Pages**: `http://localhost:3000/page/{slug}` 
+  - HTML: `http://localhost:3000/page/{slug}` 
+  - Markdown: `http://localhost:3000/page/{slug}.md`
+- **Context Stacks**: `http://localhost:3000/context/{slug}`
+  - HTML: `http://localhost:3000/context/{slug}`
+  - Markdown: `http://localhost:3000/context/{slug}.md`
+  - XML: `http://localhost:3000/context/{slug}.xml` (structured format)
 
 ### Environment Configuration
 
@@ -266,7 +273,14 @@ Convert any webpage to clean markdown using Jina Reader API with client-side pro
 Stack multiple URL conversions and text blocks into perfect LLM context with XML formatting and drag-and-drop reordering.
 
 ### SEO Page Generation
-Every conversion automatically generates a permanent, SEO-optimized page at `ctxt.help/read/{slug}` for sharing and discovery.
+Every conversion automatically generates a permanent, SEO-optimized page with semantic routing for better user experience:
+- **Single Pages**: `ctxt.help/page/{slug}` (converted URLs)
+  - **HTML**: `ctxt.help/page/{slug}` (default)
+  - **Markdown**: `ctxt.help/page/{slug}.md` (clean text format)
+- **Context Stacks**: `ctxt.help/context/{slug}` (multi-block contexts)
+  - **HTML**: `ctxt.help/context/{slug}` (default)
+  - **Markdown**: `ctxt.help/context/{slug}.md` (clean text format)  
+  - **XML**: `ctxt.help/context/{slug}.xml` (structured format)
 
 ### MCP Server Integration
 Native integration with AI tools like Claude Desktop and Cursor through the Model Context Protocol (MCP).

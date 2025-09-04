@@ -437,10 +437,10 @@ const ConversionForm: React.FC = () => {
               <h4 className="text-sm font-medium text-blue-900 mb-2">Permanent Link:</h4>
               <div className="flex items-center space-x-2">
                 <code className="flex-1 text-sm text-blue-800 bg-blue-100 px-2 py-1 rounded">
-                  {apiService.getSEOPageUrl(conversion.slug)}
+                  {apiService.getSEOPageUrl(conversion.slug, false)}
                 </code>
                 <button
-                  onClick={() => copy(apiService.getSEOPageUrl(conversion.slug))}
+                  onClick={() => copy(apiService.getSEOPageUrl(conversion.slug, false))}
                   className="p-1 text-blue-600 hover:text-blue-800"
                   title="Copy link"
                 >
@@ -540,7 +540,7 @@ const ConversionForm: React.FC = () => {
                       {result.result.slug && (
                         <button
                           onClick={() => {
-                            navigator.clipboard.writeText(apiService.getSEOPageUrl(result.result?.slug || ''));
+                            navigator.clipboard.writeText(apiService.getSEOPageUrl(result.result?.slug || '', false));
                           }}
                           className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 rounded ml-2"
                         >

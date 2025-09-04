@@ -167,17 +167,17 @@ class ApiService {
     }
   }
 
-  // Generate ChatGPT link with permalink
-  generateChatGPTLink(slug: string): string {
-    const permalink = this.getSEOPageUrl(slug);
+  // Generate ChatGPT link with permalink - requires context stack determination
+  generateChatGPTLink(slug: string, isContextStack: boolean = false): string {
+    const permalink = this.getSEOPageUrl(slug, isContextStack);
     const prompt = `Read the context at: ${permalink}`;
     const encodedPrompt = encodeURIComponent(prompt);
     return `https://chatgpt.com/?q=${encodedPrompt}`;
   }
 
-  // Generate Claude link with permalink
-  generateClaudeLink(slug: string): string {
-    const permalink = this.getSEOPageUrl(slug);
+  // Generate Claude link with permalink - requires context stack determination
+  generateClaudeLink(slug: string, isContextStack: boolean = false): string {
+    const permalink = this.getSEOPageUrl(slug, isContextStack);
     const prompt = `Read the context at: ${permalink}`;
     const encodedPrompt = encodeURIComponent(prompt);
     return `https://claude.ai/new?q=${encodedPrompt}`;
@@ -193,12 +193,30 @@ class ApiService {
     }
   }
 
-  // Get SEO page URL - now points to Next.js frontend
-  getSEOPageUrl(slug: string): string {
+  // Get SEO page URL - semantic routing based on conversion type
+  getSEOPageUrl(slug: string, isContextStack: boolean = false): string {
     const baseUrl = typeof window !== 'undefined' 
       ? window.location.origin 
       : process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    return `${baseUrl}/read/${slug}`;
+    const routeType = isContextStack ? 'context' : 'page';
+    return `${baseUrl}/${routeType}/${slug}`;
+  }
+
+  // Get markdown URL with file extension - semantic routing based on conversion type
+  getMarkdownUrl(slug: string, isContextStack: boolean = false): string {
+    const baseUrl = typeof window !== 'undefined' 
+      ? window.location.origin 
+      : process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const routeType = isContextStack ? 'context' : 'page';
+    return `${baseUrl}/${routeType}/${slug}.md`;
+  }
+
+  // Get XML URL with file extension (only for context stacks)
+  getXmlUrl(slug: string): string {
+    const baseUrl = typeof window !== 'undefined' 
+      ? window.location.origin 
+      : process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    return `${baseUrl}/context/${slug}.xml`;
   }
 
   // Handle API errors
