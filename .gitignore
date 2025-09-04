@@ -271,3 +271,4 @@ frontend/build/
 # Backend compiled
 backend/*.pyc
 backend/app/*.pyc
+/.worktrees/
