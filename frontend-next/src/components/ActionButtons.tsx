@@ -100,7 +100,8 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
     }
     
     if (targetSlug) {
-      const chatGPTUrl = apiService.generateChatGPTLink(targetSlug);
+      // ActionButtons is used for context stacks, so always pass true
+      const chatGPTUrl = apiService.generateChatGPTLink(targetSlug, true);
       window.open(chatGPTUrl, '_blank');
     }
   };
@@ -113,7 +114,8 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
     }
     
     if (targetSlug) {
-      const claudeUrl = apiService.generateClaudeLink(targetSlug);
+      // ActionButtons is used for context stacks, so always pass true
+      const claudeUrl = apiService.generateClaudeLink(targetSlug, true);
       window.open(claudeUrl, '_blank');
     }
   };
@@ -136,7 +138,7 @@ const ActionButtons: React.FC<ActionButtonsProps> = ({
         ) : (
           <>
             <Copy className="w-4 h-4" />
-            <span>Copy Markdown</span>
+            <span>Copy XML</span>
           </>
         )}
       </button>

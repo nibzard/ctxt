@@ -7,6 +7,7 @@ import { botDetector } from '@/lib/bot-detection';
 import { Conversion } from '@/types/api';
 import { isContextStack } from '@/utils/contextParser';
 import { Layers } from 'lucide-react';
+import Link from 'next/link';
 
 interface ContextConversionProps {
   params: Promise<{ slug: string }>;
@@ -91,7 +92,7 @@ export default async function ContextConversion({ params, searchParams }: Contex
       <header className="bg-white shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <a href="/" className="text-2xl font-bold text-blue-600">ctxt.help</a>
+            <Link href="/" className="text-2xl font-bold text-blue-600">ctxt.help</Link>
             <div className="text-sm text-gray-600">
               <span>{conversion.view_count + 1} views</span>
             </div>
@@ -140,7 +141,7 @@ export default async function ContextConversion({ params, searchParams }: Contex
           
           <footer className="mt-12 pt-8 border-t border-gray-200">
             <div className="text-sm text-gray-600">
-              <p>This context stack was created using <a href="/" className="text-blue-600 hover:underline">ctxt.help</a> - The LLM Context Builder.</p>
+              <p>This context stack was created using <Link href="/" className="text-blue-600 hover:underline">ctxt.help</Link> - The LLM Context Builder.</p>
               <p className="mt-2">Permanent link: <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/context/{conversion.slug}</span></p>
             </div>
           </footer>
@@ -149,9 +150,9 @@ export default async function ContextConversion({ params, searchParams }: Contex
         <div className="mt-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg p-6 text-white text-center">
           <h3 className="text-xl font-bold mb-2">Build Your Own Context Stack</h3>
           <p className="mb-4">Stack multiple URLs and text blocks into perfect LLM context with XML formatting</p>
-          <a href="/" className="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
+          <Link href="/" className="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
             Try ctxt.help Free
-          </a>
+          </Link>
         </div>
       </main>
 
@@ -160,7 +161,7 @@ export default async function ContextConversion({ params, searchParams }: Contex
           <div className="text-center text-sm text-gray-600">
             <p>&copy; 2025 ctxt.help - The LLM Context Builder</p>
             <div className="mt-2 space-x-4">
-              <a href="/" className="hover:text-blue-600">Home</a>
+              <Link href="/" className="hover:text-blue-600">Home</Link>
               <a href="/about" className="hover:text-blue-600">About</a>
               <a href="/privacy" className="hover:text-blue-600">Privacy</a>
               <a href="/terms" className="hover:text-blue-600">Terms</a>
@@ -203,7 +204,7 @@ async function getConversion(slug: string): Promise<Conversion | null> {
 
 async function checkBackendHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/health`, {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/health`, {
       cache: 'no-cache',
       signal: AbortSignal.timeout(3000), // Quick 3 second check
     });

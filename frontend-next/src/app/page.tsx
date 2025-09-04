@@ -58,10 +58,9 @@ export default function Home() {
   }, [remixSlug]);
 
   const handleExport = (blocks: ContextBlock[], format: string) => {
-    // Generate and download the context in the specified format
-    const content = generateContextContent(blocks, format);
-    downloadContent(content, `context.${format === 'json' ? 'json' : 'md'}`, 
-      format === 'json' ? 'application/json' : 'text/markdown');
+    // Always generate and download as Markdown format
+    const content = generateContextContent(blocks, 'markdown');
+    downloadContent(content, 'context.md', 'text/markdown');
   };
 
   const handleSave = (name: string, blocks: ContextBlock[]) => {

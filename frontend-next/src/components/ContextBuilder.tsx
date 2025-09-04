@@ -4,10 +4,11 @@
 'use client';
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { Menu, Transition } from '@headlessui/react';
+import { Fragment } from 'react';
 import { SortableItem } from './SortableItem';
 import { DropZone } from './DropZone';
-import ActionButtons from './ActionButtons';
-import { Plus, Save, Download, Trash2, Link2, Check, Layers } from 'lucide-react';
+import { Plus, Save, Download, Trash2, Link2, Check, Layers, MoreVertical, ExternalLink, Copy } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { estimateTokenCount, formatTokenCount, getContextUsage } from '@/utils/tokenCount';
 
@@ -22,7 +23,6 @@ interface ContextBlock {
 
 interface ContextBuilderProps {
   onExport?: (blocks: ContextBlock[], format: string) => void;
-  onSave?: (name: string, blocks: ContextBlock[]) => void;
   initialBlocks?: ContextBlock[];
   initialStackName?: string;
   isLoading?: boolean;
@@ -31,7 +31,6 @@ interface ContextBuilderProps {
 
 const ContextBuilder: React.FC<ContextBuilderProps> = ({
   onExport,
-  onSave,
   initialBlocks = [],
   initialStackName = '',
   isLoading = false,
@@ -42,13 +41,13 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   const [newBlockContent, setNewBlockContent] = useState('');
   const [stackName, setStackName] = useState(initialStackName);
   const [isAddingBlock, setIsAddingBlock] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'xml' | 'markdown' | 'json'>('xml');
   const [isConverting, setIsConverting] = useState(false);
   const [importedBlockIds, setImportedBlockIds] = useState<Set<string>>(new Set());
   const [importNotification, setImportNotification] = useState<string>('');
   const [savedContextSlug, setSavedContextSlug] = useState<string>('');
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [isSavingForPermalink, setIsSavingForPermalink] = useState(false);
+  const [xmlCopied, setXmlCopied] = useState(false);
   const [isRemixMode, setIsRemixMode] = useState(false);
   const [hasAutoSaved, setHasAutoSaved] = useState(false);
   const [autoSaveNotification, setAutoSaveNotification] = useState<string>('');
@@ -133,7 +132,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   // Check for batch import on component mount
   useEffect(() => {
     checkForBatchImport();
-  }, []);
+  }, [checkForBatchImport]);
 
   // Check for batch imports when component becomes visible
   useEffect(() => {
@@ -174,7 +173,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         }
       }
     }
-  }, []); // Run only on mount after batch import check
+  }, [blocks.length, initialBlocks.length]); // Run only on mount after batch import check
 
   // Handle remix/initial data updates
   useEffect(() => {
@@ -204,13 +203,13 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   }, [blocks, stackName]);
 
   const generateFullContext = useCallback((): string => {
-    // Generate markdown format matching the single URL behavior
-    return blocks.map(block => {
-      if (block.type === 'url') {
-        return `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`;
-      }
-      return block.content;
-    }).join('\n\n---\n\n');
+    // Always generate XML format for copy to clipboard
+    return `<context>\n${blocks.map((block, index) => {
+      const tagName = block.type === 'text' ? 'instruction' : 'context';
+      const urlAttr = block.url ? ` source_url="${block.url}"` : '';
+      const titleAttr = block.title ? ` title="${block.title}"` : '';
+      return `  <${tagName}_${index + 1} type="${block.type}"${titleAttr}${urlAttr}>\n    ${block.content.replace(/\n/g, '\n    ')}\n  </${tagName}_${index + 1}>`;
+    }).join('\n')}\n</context>`;
   }, [blocks]);
 
   const performAutoSave = useCallback(async () => {
@@ -339,7 +338,7 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     } finally {
       setIsConverting(false);
     }
-  }, [blocks.length]);
+  }, [blocks.length, performAutoSave]);
 
   const addBlock = useCallback(async () => {
     if (!newBlockContent.trim()) return;
@@ -407,49 +406,30 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
 
   const handleExport = useCallback(() => {
     if (onExport) {
-      onExport(blocks, exportFormat);
+      onExport(blocks, 'markdown');
     }
-  }, [blocks, exportFormat, onExport]);
+  }, [blocks, onExport]);
 
-  const handleSave = useCallback(() => {
-    if (onSave && stackName.trim()) {
-      onSave(stackName, blocks);
-      // Optionally clear the draft after saving
-      // setBlocks([]);
-      // setStackName('');
-      // localStorage.removeItem('contextBuilderDraft');
-    }
-  }, [blocks, stackName, onSave]);
 
   const calculateTotalTokens = useCallback(() => {
     const fullContent = generateFullContext();
     return estimateTokenCount(fullContent);
   }, [generateFullContext]);
 
-  const getTokensForBlock = useCallback((block: ContextBlock) => {
-    const blockContent = block.type === 'url' 
-      ? `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`
-      : block.content;
-    return estimateTokenCount(blockContent);
-  }, []);
 
-  const handleContextSaved = useCallback((slug: string) => {
-    // Optional: Show success message or update UI
-    console.log('Context stack saved with slug:', slug);
-    setSavedContextSlug(slug);
-  }, []);
 
-  const handleCopyPermalink = useCallback(async () => {
-    if (blocks.length === 0) return;
-    
+  // Consolidated Save & Get Link handler
+  const handleSaveAndGetLink = useCallback(async () => {
+    if (blocks.length === 0 || !stackName.trim()) return;
+
     let targetSlug = savedContextSlug;
     
-    // If we don't have a saved slug yet, save the context stack first
+    // If not already saved, save first
     if (!targetSlug) {
       setIsSavingForPermalink(true);
       try {
         const contextStackData = {
-          title: stackName.trim() || `Context Stack - ${new Date().toLocaleDateString()}`,
+          title: stackName.trim(),
           blocks: blocks,
           content: generateFullContext()
         };
@@ -458,36 +438,40 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         targetSlug = savedContext.slug;
         setSavedContextSlug(targetSlug);
       } catch (error) {
-        console.error('Error saving context stack for permalink:', error);
+        console.error('Error saving context stack:', error);
         return;
       } finally {
         setIsSavingForPermalink(false);
       }
     }
     
+    // Copy permalink to clipboard
     if (targetSlug) {
-      const permalink = apiService.getSEOPageUrl(targetSlug, true); // Context stacks always use true
+      const permalink = apiService.getSEOPageUrl(targetSlug, true);
       try {
         await navigator.clipboard.writeText(permalink);
         setPermalinkCopied(true);
         setTimeout(() => setPermalinkCopied(false), 2000);
       } catch (error) {
-        console.error('Error copying permalink to clipboard:', error);
-        // Fallback for older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = permalink;
-        document.body.appendChild(textArea);
-        textArea.select();
-        const success = document.execCommand('copy');
-        document.body.removeChild(textArea);
-        
-        if (success) {
-          setPermalinkCopied(true);
-          setTimeout(() => setPermalinkCopied(false), 2000);
-        }
+        console.error('Failed to copy permalink:', error);
       }
     }
   }, [blocks, savedContextSlug, stackName, generateFullContext]);
+
+  // Copy XML to clipboard handler  
+  const handleCopyXML = useCallback(async () => {
+    if (blocks.length === 0) return;
+    
+    const xmlContent = generateFullContext();
+    try {
+      await navigator.clipboard.writeText(xmlContent);
+      setXmlCopied(true);
+      setTimeout(() => setXmlCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy XML:', error);
+    }
+  }, [generateFullContext, blocks.length]);
+
 
   const handleClearAll = useCallback(() => {
     if (blocks.length === 0 && !stackName.trim()) return;
@@ -506,32 +490,14 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       return text.slice(0, maxLength) + '\n... (truncated for preview)';
     };
 
-    const content = blocks.map(block => {
-      if (block.type === 'url') {
-        return `${block.title || 'Untitled'}\n${block.url}\n---\n${truncateForPreview(block.content, 500)}`;
-      }
-      return truncateForPreview(block.content, 500);
-    }).join('\n\n---\n\n');
-
-    if (exportFormat === 'xml') {
-      const xmlContent = `<context>\n${blocks.map((block, index) => {
-        const tagName = block.type === 'text' ? 'instruction' : 'context';
-        const urlAttr = block.url ? ` source_url="${block.url}"` : '';
-        return `  <${tagName}_${index + 1} type="${block.type}"${block.title ? ` title="${block.title}"` : ''}${urlAttr}>\n    ${truncateForPreview(block.content, 500).replace(/\n/g, '\n    ')}\n  </${tagName}_${index + 1}>`;
-      }).join('\n')}\n</context>`;
-      return truncateForPreview(xmlContent);
-    } else if (exportFormat === 'json') {
-      const jsonContent = JSON.stringify({ 
-        blocks: blocks.map(block => ({
-          ...block,
-          content: truncateForPreview(block.content, 500)
-        }))
-      }, null, 2);
-      return truncateForPreview(jsonContent);
-    }
-    
-    return content; // markdown format
-  }, [blocks, exportFormat]);
+    // Always generate XML format for preview
+    const xmlContent = `<context>\n${blocks.map((block, index) => {
+      const tagName = block.type === 'text' ? 'instruction' : 'context';
+      const urlAttr = block.url ? ` source_url="${block.url}"` : '';
+      return `  <${tagName}_${index + 1} type="${block.type}"${block.title ? ` title="${block.title}"` : ''}${urlAttr}>\n    ${truncateForPreview(block.content, 500).replace(/\n/g, '\n    ')}\n  </${tagName}_${index + 1}>`;
+    }).join('\n')}\n</context>`;
+    return truncateForPreview(xmlContent);
+  }, [blocks]);
 
   return (
     <div className={`max-w-4xl mx-auto p-6 ${className}`}>
@@ -616,39 +582,12 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           
-          <div className="flex gap-2 flex-wrap">
-            <select
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as 'xml' | 'markdown' | 'json')}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="xml">XML</option>
-              <option value="markdown">Markdown</option>
-              <option value="json">JSON</option>
-            </select>
-            
+          <div className="flex gap-3 flex-wrap">
+            {/* Primary: Save & Get Link */}
             <button
-              onClick={handleSave}
-              disabled={!stackName.trim() || blocks.length === 0}
-              className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-            >
-              <Save className="w-4 h-4 mr-2" />
-              Save
-            </button>
-            
-            <button
-              onClick={handleExport}
-              disabled={blocks.length === 0}
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export
-            </button>
-            
-            <button
-              onClick={handleCopyPermalink}
-              disabled={blocks.length === 0 || isSavingForPermalink}
-              className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              onClick={handleSaveAndGetLink}
+              disabled={!stackName.trim() || blocks.length === 0 || isSavingForPermalink}
+              className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
             >
               {isSavingForPermalink ? (
                 <>
@@ -658,38 +597,126 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
               ) : permalinkCopied ? (
                 <>
                   <Check className="w-4 h-4 mr-2" />
-                  <span>Copied!</span>
+                  <span>Link Copied!</span>
+                </>
+              ) : savedContextSlug ? (
+                <>
+                  <Link2 className="w-4 h-4 mr-2" />
+                  <span>Copy Link</span>
                 </>
               ) : (
                 <>
-                  <Link2 className="w-4 h-4 mr-2" />
-                  <span>Copy Permalink</span>
+                  <Save className="w-4 h-4 mr-2" />
+                  <span>Save & Get Link</span>
                 </>
               )}
             </button>
+
+            {/* Secondary: Copy XML */}
+            <button
+              onClick={handleCopyXML}
+              disabled={blocks.length === 0}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:bg-gray-50 disabled:cursor-not-allowed"
+            >
+              {xmlCopied ? (
+                <>
+                  <Check className="w-4 h-4 mr-2 text-green-600" />
+                  <span className="text-green-600">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 mr-2" />
+                  <span>Copy XML</span>
+                </>
+              )}
+            </button>
+
+            {/* Tertiary: More Actions Dropdown */}
+            {blocks.length > 0 && (
+              <Menu as="div" className="relative inline-block text-left">
+                <Menu.Button
+                  disabled={blocks.length === 0}
+                  className="inline-flex items-center px-3 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg hover:bg-gray-50 disabled:bg-gray-50 disabled:cursor-not-allowed"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </Menu.Button>
+
+                <Transition
+                  as={Fragment}
+                  enter="transition ease-out duration-100"
+                  enterFrom="transform opacity-0 scale-95"
+                  enterTo="transform opacity-100 scale-100"
+                  leave="transition ease-in duration-75"
+                  leaveFrom="transform opacity-100 scale-100"
+                  leaveTo="transform opacity-0 scale-95"
+                >
+                  <Menu.Items className="absolute right-0 z-10 mt-2 w-56 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                    <div className="py-1">
+                      <Menu.Item>
+                        {({ active }) => (
+                          <button
+                            onClick={handleExport}
+                            className={`${active ? 'bg-gray-100' : ''} flex items-center w-full px-4 py-2 text-sm text-gray-700`}
+                          >
+                            <Download className="w-4 h-4 mr-3" />
+                            Export Markdown
+                          </button>
+                        )}
+                      </Menu.Item>
+                      
+                      <Menu.Item>
+                        {({ active }) => (
+                          <button
+                            onClick={async () => {
+                              const chatGPTUrl = apiService.generateChatGPTLink(savedContextSlug || 'temp', true);
+                              window.open(chatGPTUrl, '_blank');
+                            }}
+                            disabled={!savedContextSlug}
+                            className={`${active ? 'bg-gray-100' : ''} flex items-center w-full px-4 py-2 text-sm text-gray-700 disabled:text-gray-400`}
+                          >
+                            <ExternalLink className="w-4 h-4 mr-3" />
+                            Send to ChatGPT
+                          </button>
+                        )}
+                      </Menu.Item>
+                      
+                      <Menu.Item>
+                        {({ active }) => (
+                          <button
+                            onClick={async () => {
+                              const claudeUrl = apiService.generateClaudeLink(savedContextSlug || 'temp', true);
+                              window.open(claudeUrl, '_blank');
+                            }}
+                            disabled={!savedContextSlug}
+                            className={`${active ? 'bg-gray-100' : ''} flex items-center w-full px-4 py-2 text-sm text-gray-700 disabled:text-gray-400`}
+                          >
+                            <ExternalLink className="w-4 h-4 mr-3" />
+                            Send to Claude
+                          </button>
+                        )}
+                      </Menu.Item>
+                      
+                      <div className="border-t border-gray-100"></div>
+                      
+                      <Menu.Item>
+                        {({ active }) => (
+                          <button
+                            onClick={handleClearAll}
+                            className={`${active ? 'bg-red-50 text-red-600' : 'text-red-600'} flex items-center w-full px-4 py-2 text-sm`}
+                          >
+                            <Trash2 className="w-4 h-4 mr-3" />
+                            Clear All
+                          </button>
+                        )}
+                      </Menu.Item>
+                    </div>
+                  </Menu.Items>
+                </Transition>
+              </Menu>
+            )}
           </div>
         </div>
 
-        {/* Action Buttons using reusable component */}
-        {blocks.length > 0 && (
-          <div className="flex flex-wrap gap-3 mb-4">
-            <ActionButtons
-              contextBlocks={blocks}
-              contextContent={generateFullContext()}
-              onContextSaved={handleContextSaved}
-              className="flex-1"
-            />
-            
-            <button
-              onClick={handleClearAll}
-              disabled={blocks.length === 0 && !stackName.trim()}
-              className="flex items-center space-x-2 px-4 py-2 bg-red-100 hover:bg-red-200 disabled:bg-gray-100 disabled:cursor-not-allowed rounded-lg transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Clear All</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Add Block Section */}
@@ -833,42 +860,12 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       {blocks.length > 0 && (
         <div className="bg-gray-50 rounded-lg border border-gray-200 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            Preview ({exportFormat})
+            Preview (XML)
           </h3>
           <pre className="bg-white border rounded p-4 text-sm overflow-auto max-h-96 whitespace-pre-wrap mb-4">
             {generatePreview()}
           </pre>
           
-          {/* Action Buttons for Preview */}
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={handleCopyPermalink}
-              disabled={blocks.length === 0 || isSavingForPermalink}
-              className="inline-flex items-center px-4 py-2 bg-purple-100 hover:bg-purple-200 disabled:bg-gray-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-            >
-              {isSavingForPermalink ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-600 mr-2"></div>
-                  <span>Saving...</span>
-                </>
-              ) : permalinkCopied ? (
-                <>
-                  <Check className="w-4 h-4 mr-2" />
-                  <span>Copied!</span>
-                </>
-              ) : (
-                <>
-                  <Link2 className="w-4 h-4 mr-2" />
-                  <span>Copy Permalink</span>
-                </>
-              )}
-            </button>
-            <ActionButtons
-              contextBlocks={blocks}
-              contextContent={generateFullContext()}
-              onContextSaved={handleContextSaved}
-            />
-          </div>
         </div>
       )}
     </div>

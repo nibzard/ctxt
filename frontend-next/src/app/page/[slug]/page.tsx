@@ -6,6 +6,7 @@ import { headers } from 'next/headers';
 import { botDetector } from '@/lib/bot-detection';
 import { Conversion } from '@/types/api';
 import { isContextStack } from '@/utils/contextParser';
+import Link from 'next/link';
 
 interface PageConversionProps {
   params: Promise<{ slug: string }>;
@@ -90,7 +91,7 @@ export default async function PageConversion({ params, searchParams }: PageConve
       <header className="bg-white shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <a href="/" className="text-2xl font-bold text-blue-600">ctxt.help</a>
+            <Link href="/" className="text-2xl font-bold text-blue-600">ctxt.help</Link>
             <div className="text-sm text-gray-600">
               <span>{conversion.view_count + 1} views</span>
             </div>
@@ -130,7 +131,7 @@ export default async function PageConversion({ params, searchParams }: PageConve
           
           <footer className="mt-12 pt-8 border-t border-gray-200">
             <div className="text-sm text-gray-600">
-              <p>This content was converted from <a href={conversion.source_url} className="text-blue-600 hover:underline" target="_blank" rel="noopener">{conversion.source_url}</a> using <a href="/" className="text-blue-600 hover:underline">ctxt.help</a> - The LLM Context Builder.</p>
+              <p>This content was converted from <a href={conversion.source_url} className="text-blue-600 hover:underline" target="_blank" rel="noopener">{conversion.source_url}</a> using <Link href="/" className="text-blue-600 hover:underline">ctxt.help</Link> - The LLM Context Builder.</p>
               <p className="mt-2">Permanent link: <span className="font-mono text-xs bg-gray-100 px-2 py-1 rounded">https://ctxt.help/page/{conversion.slug}</span></p>
             </div>
           </footer>
@@ -139,9 +140,9 @@ export default async function PageConversion({ params, searchParams }: PageConve
         <div className="mt-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg p-6 text-white text-center">
           <h3 className="text-xl font-bold mb-2">Convert Your Own URLs</h3>
           <p className="mb-4">Transform any webpage into clean markdown perfect for AI and LLM contexts</p>
-          <a href="/" className="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
+          <Link href="/" className="inline-block bg-white text-blue-600 font-semibold px-6 py-2 rounded-lg hover:bg-gray-100 transition-colors">
             Try ctxt.help Free
-          </a>
+          </Link>
         </div>
       </main>
 
@@ -150,7 +151,7 @@ export default async function PageConversion({ params, searchParams }: PageConve
           <div className="text-center text-sm text-gray-600">
             <p>&copy; 2025 ctxt.help - The LLM Context Builder</p>
             <div className="mt-2 space-x-4">
-              <a href="/" className="hover:text-blue-600">Home</a>
+              <Link href="/" className="hover:text-blue-600">Home</Link>
               <a href="/about" className="hover:text-blue-600">About</a>
               <a href="/privacy" className="hover:text-blue-600">Privacy</a>
               <a href="/terms" className="hover:text-blue-600">Terms</a>
@@ -193,7 +194,7 @@ async function getConversion(slug: string): Promise<Conversion | null> {
 
 async function checkBackendHealth(): Promise<boolean> {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/health`, {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/health`, {
       cache: 'no-cache',
       signal: AbortSignal.timeout(3000), // Quick 3 second check
     });
