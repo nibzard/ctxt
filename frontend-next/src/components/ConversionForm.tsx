@@ -6,7 +6,7 @@
 import React, { useState, useCallback } from 'react';
 import { Link2, FileText, Check, AlertCircle, Copy, ExternalLink } from 'lucide-react';
 import ActionButtons from './ActionButtons';
-import { useConversion } from '@/hooks';
+import { useConversion, useClipboard } from '@/hooks';
 import { apiService } from '@/services/api';
 import { Conversion } from '@/types/api';
 import { formatTokenCount } from '@/utils/tokenCount';
@@ -28,6 +28,7 @@ const ConversionForm: React.FC = () => {
   const [batchStatus, setBatchStatus] = useState<string>('');
   const [contextBuilderStatus, setContextBuilderStatus] = useState<string>('');
   const { conversion, loading, error, convertUrl, clearError, isFromCache, cacheAgeHours } = useConversion();
+  const { copy } = useClipboard();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
