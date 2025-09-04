@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, desc
 from app.db.database import get_db
-from app.models import Conversion
+from app.models import Conversion, ContextStack
 from app.services.bot_detection import bot_detector
 from app.core.config import settings
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
+from xml.etree.ElementTree import Element, SubElement, tostring
+import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -355,5 +358,201 @@ async def serve_html_content(conversion: Conversion, request: Request) -> HTMLRe
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "X-Robots-Tag": "index, follow"
+        }
+    )
+
+@router.get("/sitemap.xml")
+async def get_sitemap(db: Session = Depends(get_db)):
+    """
+    Generate XML sitemap for all public conversions and context stacks
+    """
+    try:
+        # Create the root urlset element
+        urlset = Element('urlset')
+        urlset.set('xmlns', 'http://www.sitemaps.org/schemas/sitemap/0.9')
+        
+        # Add homepage
+        homepage_url = SubElement(urlset, 'url')
+        SubElement(homepage_url, 'loc').text = 'https://ctxt.help/'
+        SubElement(homepage_url, 'changefreq').text = 'daily'
+        SubElement(homepage_url, 'priority').text = '1.0'
+        SubElement(homepage_url, 'lastmod').text = datetime.utcnow().strftime('%Y-%m-%d')
+        
+        # Get all public and indexed conversions
+        conversions = db.query(Conversion).filter(
+            and_(
+                Conversion.is_public == True,
+                Conversion.is_indexed == True
+            )
+        ).order_by(desc(Conversion.updated_at)).all()
+        
+        # Add conversion pages
+        for conversion in conversions:
+            # Calculate priority based on view count and recency
+            priority = calculate_conversion_priority(conversion)
+            
+            # Add /read/{slug} SEO route
+            read_url = SubElement(urlset, 'url')
+            SubElement(read_url, 'loc').text = f'https://ctxt.help/read/{conversion.slug}'
+            SubElement(read_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
+            SubElement(read_url, 'changefreq').text = 'weekly'
+            SubElement(read_url, 'priority').text = f'{priority:.1f}'
+            
+            # Add /page/{slug} route
+            page_url = SubElement(urlset, 'url')
+            SubElement(page_url, 'loc').text = f'https://ctxt.help/page/{conversion.slug}'
+            SubElement(page_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
+            SubElement(page_url, 'changefreq').text = 'weekly'
+            SubElement(page_url, 'priority').text = f'{priority:.1f}'
+            
+            # Add /page/{slug}/markdown route
+            markdown_url = SubElement(urlset, 'url')
+            SubElement(markdown_url, 'loc').text = f'https://ctxt.help/page/{conversion.slug}/markdown'
+            SubElement(markdown_url, 'lastmod').text = (conversion.updated_at or conversion.created_at).strftime('%Y-%m-%d')
+            SubElement(markdown_url, 'changefreq').text = 'weekly'
+            SubElement(markdown_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
+        
+        # Get all public context stacks
+        context_stacks = db.query(ContextStack).filter(
+            ContextStack.is_public == True
+        ).order_by(desc(ContextStack.updated_at)).all()
+        
+        # Add context stack pages
+        for stack in context_stacks:
+            # Calculate priority based on usage
+            priority = calculate_context_stack_priority(stack)
+            
+            # Add /context/{id} route
+            context_url = SubElement(urlset, 'url')
+            SubElement(context_url, 'loc').text = f'https://ctxt.help/context/{stack.id}'
+            SubElement(context_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
+            SubElement(context_url, 'changefreq').text = 'weekly'
+            SubElement(context_url, 'priority').text = f'{priority:.1f}'
+            
+            # Add /context/{id}/markdown route
+            context_md_url = SubElement(urlset, 'url')
+            SubElement(context_md_url, 'loc').text = f'https://ctxt.help/context/{stack.id}/markdown'
+            SubElement(context_md_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
+            SubElement(context_md_url, 'changefreq').text = 'weekly'
+            SubElement(context_md_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
+            
+            # Add /context/{id}/xml route
+            context_xml_url = SubElement(urlset, 'url')
+            SubElement(context_xml_url, 'loc').text = f'https://ctxt.help/context/{stack.id}/xml'
+            SubElement(context_xml_url, 'lastmod').text = (stack.updated_at or stack.created_at).strftime('%Y-%m-%d')
+            SubElement(context_xml_url, 'changefreq').text = 'weekly'
+            SubElement(context_xml_url, 'priority').text = f'{max(priority - 0.1, 0.1):.1f}'
+        
+        # Convert to XML string
+        xml_string = tostring(urlset, encoding='unicode', method='xml')
+        
+        # Add XML declaration
+        sitemap_xml = f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_string}'
+        
+        return Response(
+            content=sitemap_xml,
+            media_type="application/xml",
+            headers={
+                "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
+                "Content-Type": "application/xml; charset=utf-8"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error generating sitemap: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate sitemap"
+        )
+
+def calculate_conversion_priority(conversion: Conversion) -> float:
+    """
+    Calculate sitemap priority for a conversion based on view count and recency
+    Returns a value between 0.1 and 0.9
+    """
+    # Base priority
+    priority = 0.6
+    
+    # Boost for high view count
+    if conversion.view_count > 1000:
+        priority += 0.2
+    elif conversion.view_count > 100:
+        priority += 0.1
+    elif conversion.view_count > 10:
+        priority += 0.05
+    
+    # Boost for recent content
+    if conversion.created_at:
+        days_old = (datetime.utcnow() - conversion.created_at).days
+        if days_old < 30:
+            priority += 0.1
+        elif days_old < 90:
+            priority += 0.05
+    
+    # Ensure priority is within valid range
+    return min(max(priority, 0.1), 0.9)
+
+def calculate_context_stack_priority(stack: ContextStack) -> float:
+    """
+    Calculate sitemap priority for a context stack based on usage
+    Returns a value between 0.1 and 0.8
+    """
+    # Base priority (slightly lower than conversions)
+    priority = 0.5
+    
+    # Boost for high usage
+    if stack.use_count > 50:
+        priority += 0.2
+    elif stack.use_count > 10:
+        priority += 0.1
+    elif stack.use_count > 1:
+        priority += 0.05
+    
+    # Boost for templates
+    if stack.is_template:
+        priority += 0.1
+    
+    # Boost for recent activity
+    if stack.last_used_at:
+        days_since_use = (datetime.utcnow() - stack.last_used_at).days
+        if days_since_use < 7:
+            priority += 0.1
+        elif days_since_use < 30:
+            priority += 0.05
+    
+    # Ensure priority is within valid range
+    return min(max(priority, 0.1), 0.8)
+
+@router.get("/robots.txt")
+async def get_robots_txt():
+    """
+    Generate robots.txt file that references the sitemap
+    """
+    robots_content = f"""User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://ctxt.help/sitemap.xml
+
+# Crawl-delay for politeness
+Crawl-delay: 1
+
+# Allow specific paths
+Allow: /read/
+Allow: /page/
+Allow: /context/
+
+# Disallow admin and api paths
+Disallow: /api/
+Disallow: /admin/
+Disallow: /auth/
+"""
+    
+    return Response(
+        content=robots_content,
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "public, max-age=86400",  # Cache for 24 hours
+            "Content-Type": "text/plain; charset=utf-8"
         }
     )

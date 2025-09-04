@@ -4,9 +4,10 @@ import pytest
 import asyncio
 from typing import AsyncGenerator, Generator
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.types import TypeDecorator, String
 
 from app.main import app
 from app.db.database import Base, get_db
@@ -18,11 +19,43 @@ import uuid
 # Test database URL - use in-memory SQLite for tests
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
 
+# Handle UUID for SQLite in tests
+class SqliteUUID(TypeDecorator):
+    """SQLite-compatible UUID type"""
+    impl = String
+    cache_ok = True
+    
+    def load_dialect_impl(self, dialect):
+        return dialect.type_descriptor(String(36))
+    
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif isinstance(value, uuid.UUID):
+            return str(value)
+        else:
+            return str(value)
+    
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            return uuid.UUID(value)
+
 engine = create_engine(
     SQLALCHEMY_TEST_DATABASE_URL,
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+
+# Add UUID support to SQLite for testing
+from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+
+def visit_UUID(self, type_, **kw):
+    return "VARCHAR(36)"
+
+SQLiteTypeCompiler.visit_UUID = visit_UUID
+
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 @pytest.fixture(scope="session")
