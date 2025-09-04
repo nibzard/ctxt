@@ -1,17 +1,21 @@
 // ABOUTME: SSR page component for serving SEO-optimized conversion pages
 // ABOUTME: Handles bot detection and serves markdown vs HTML based on user agent
 
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { botDetector } from '@/lib/bot-detection';
 import { Conversion } from '@/types/api';
+import { isContextStack } from '@/utils/contextParser';
+import { Layers } from 'lucide-react';
 
 interface ConversionPageProps {
   params: Promise<{ slug: string }>;
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
-export default async function ConversionPage({ params }: ConversionPageProps) {
+export default async function ConversionPage({ params, searchParams }: ConversionPageProps) {
   const { slug } = await params;
+  const search = await searchParams || {};
   
   // Fetch conversion data from FastAPI backend
   const conversion = await getConversion(slug);
@@ -20,36 +24,64 @@ export default async function ConversionPage({ params }: ConversionPageProps) {
     notFound();
   }
 
-  // Increment view count via API
-  await incrementViewCount(slug);
+  // Check backend health and increment view count
+  const backendHealthy = await checkBackendHealth();
+  if (backendHealthy) {
+    incrementViewCount(slug).catch(() => {
+      // Silently handle errors - view counting is not critical for page functionality
+    });
+  }
 
-  // Get user agent from headers
-  const headersList = headers();
+  // Get user agent and accept header
+  const headersList = await headers();
   const userAgent = headersList.get('user-agent') || '';
+  const acceptHeader = headersList.get('accept') || '';
 
-  // Determine if this is a bot request
-  const shouldServeMarkdown = botDetector.shouldServeMarkdown(userAgent);
+  // Check if user explicitly requested markdown
+  const formatParam = search.format;
+  const requestsMarkdown = formatParam === 'markdown' || 
+                          acceptHeader.includes('text/plain') || 
+                          acceptHeader.includes('text/markdown');
+
+  // Determine if this is a bot request or explicit markdown request
+  const shouldServeMarkdown = requestsMarkdown || botDetector.shouldServeMarkdown(userAgent);
 
   // Log bot access for monitoring
   botDetector.logBotAccess(userAgent, slug, shouldServeMarkdown);
 
-  if (shouldServeMarkdown) {
-    // Return plain text response for bots
-    const markdownContent = formatMarkdownContent(conversion);
-    
-    return new Response(markdownContent, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
-        'X-Robots-Tag': 'index, follow',
-        'X-Content-Type': 'markdown',
-      },
-    });
+  // Redirect to markdown route if explicitly requested
+  if (requestsMarkdown) {
+    redirect(`/read/${slug}/markdown`);
+  }
+  
+  // For bots, we'll handle them differently - they should get the /markdown route too
+  if (botDetector.shouldServeMarkdown(userAgent)) {
+    redirect(`/read/${slug}/markdown`);
   }
 
   // Serve HTML for humans
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Backend status banner */}
+      {!backendHealthy && (
+        <div className="bg-amber-50 border-l-4 border-amber-400 p-3">
+          <div className="max-w-6xl mx-auto px-4">
+            <div className="flex items-center">
+              <div className="flex-shrink-0">
+                <svg className="h-4 w-4 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-2">
+                <p className="text-sm text-amber-700">
+                  Some features may be temporarily unavailable. Content is served from cache.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <header className="bg-white shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -74,10 +106,29 @@ export default async function ConversionPage({ params }: ConversionPageProps) {
             </div>
             
             <div className="flex flex-wrap gap-2">
-              <a href={conversion.source_url} 
-                 className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors"
-                 target="_blank" rel="noopener">
-                🔗 View Original
+              {!isContextStack(conversion) ? (
+                <a href={conversion.source_url} 
+                   className="inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs hover:bg-blue-200 transition-colors"
+                   target="_blank" rel="noopener">
+                  🔗 View Original
+                </a>
+              ) : (
+                <span className="inline-flex items-center px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs">
+                  📚 Context Stack
+                </span>
+              )}
+              
+              {isContextStack(conversion) && (
+                <a href={`/?remix=${conversion.slug}`}
+                   className="inline-flex items-center px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs hover:bg-green-200 transition-colors">
+                  <Layers className="w-3 h-3 mr-1" />
+                  Remix this Context
+                </a>
+              )}
+              
+              <a href={`/read/${conversion.slug}/markdown`}
+                 className="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-xs hover:bg-gray-200 transition-colors">
+                📄 View as Markdown
               </a>
             </div>
           </header>
@@ -125,47 +176,66 @@ async function getConversion(slug: string): Promise<Conversion | null> {
     const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/conversions/slug/${slug}`, {
       cache: 'force-cache',
       next: { revalidate: 3600 }, // Revalidate every hour
+      signal: AbortSignal.timeout(10000), // 10 second timeout
     });
     
     if (!response.ok) {
+      if (response.status === 404) {
+        console.warn(`Conversion not found: ${slug}`);
+      } else {
+        console.warn(`Failed to fetch conversion with status: ${response.status}`);
+      }
       return null;
     }
     
     return await response.json();
-  } catch (error) {
-    console.error('Failed to fetch conversion:', error);
+  } catch (error: unknown) {
+    // Only log non-connection errors
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorName = error instanceof Error ? error.name : '';
+    if (errorName !== 'AbortError' && !errorMessage.includes('ECONNREFUSED')) {
+      console.warn('Failed to fetch conversion:', errorMessage);
+    }
     return null;
+  }
+}
+
+async function checkBackendHealth(): Promise<boolean> {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/health`, {
+      cache: 'no-cache',
+      signal: AbortSignal.timeout(3000), // Quick 3 second check
+    });
+    return response.ok;
+  } catch {
+    // Backend is unavailable
+    return false;
   }
 }
 
 async function incrementViewCount(slug: string): Promise<void> {
   try {
-    await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/conversions/slug/${slug}/view`, {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/conversions/slug/${slug}/view`, {
       method: 'POST',
       cache: 'no-cache',
+      signal: AbortSignal.timeout(5000), // 5 second timeout
     });
-  } catch (error) {
-    console.error('Failed to increment view count:', error);
+    
+    if (!response.ok) {
+      // Log only non-connection errors
+      console.warn(`View count increment failed with status: ${response.status}`);
+    }
+  } catch (error: unknown) {
+    // Only log if it's not a connection refused error (backend down)
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorName = error instanceof Error ? error.name : '';
+    if (errorName !== 'AbortError' && !errorMessage.includes('ECONNREFUSED')) {
+      console.warn('View count increment failed:', errorMessage);
+    }
+    // Silent fail for connection errors - backend may be temporarily down
   }
 }
 
-function formatMarkdownContent(conversion: Conversion): string {
-  return `# ${conversion.title}
-
-**Source:** ${conversion.source_url}
-**Domain:** ${conversion.domain}
-**Published:** ${new Date(conversion.created_at).toISOString().split('T')[0]}
-**Word Count:** ${conversion.word_count}
-**Reading Time:** ${Math.max(1, Math.floor(conversion.word_count / 200))} minutes
-
----
-
-${conversion.content}
-
----
-*Converted by ctxt.help - The LLM Context Builder*
-*Permanent link: https://ctxt.help/read/${conversion.slug}*`;
-}
 
 function formatHtmlContent(content: string): string {
   // Simple markdown to HTML conversion

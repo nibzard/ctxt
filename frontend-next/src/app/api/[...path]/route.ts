@@ -7,37 +7,42 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest('GET', request, params.path);
+  const { path } = await params;
+  return proxyRequest('GET', request, path);
 }
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest('POST', request, params.path);
+  const { path } = await params;
+  return proxyRequest('POST', request, path);
 }
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest('PUT', request, params.path);
+  const { path } = await params;
+  return proxyRequest('PUT', request, path);
 }
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest('DELETE', request, params.path);
+  const { path } = await params;
+  return proxyRequest('DELETE', request, path);
 }
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
-  return proxyRequest('PATCH', request, params.path);
+  const { path } = await params;
+  return proxyRequest('PATCH', request, path);
 }
 
 async function proxyRequest(

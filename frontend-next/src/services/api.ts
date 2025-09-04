@@ -72,6 +72,12 @@ class ApiService {
     return response.data;
   }
 
+  // Get conversion by slug
+  async getConversionBySlug(slug: string): Promise<Conversion> {
+    const response = await this.api.get<Conversion>(`/api/conversions/slug/${slug}`);
+    return response.data;
+  }
+
   // Create new conversion from client-side processed data
   async saveConversion(data: ConversionCreateRequest): Promise<Conversion> {
     const response = await this.api.post<Conversion>('/api/conversions', data);

@@ -7,7 +7,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { SortableItem } from './SortableItem';
 import { DropZone } from './DropZone';
 import ActionButtons from './ActionButtons';
-import { Plus, Save, Download, Trash2 } from 'lucide-react';
+import { Plus, Save, Download, Trash2, Link2, Check, Layers } from 'lucide-react';
 import { apiService } from '@/services/api';
 import { estimateTokenCount, formatTokenCount, getContextUsage } from '@/utils/tokenCount';
 
@@ -24,6 +24,8 @@ interface ContextBuilderProps {
   onExport?: (blocks: ContextBlock[], format: string) => void;
   onSave?: (name: string, blocks: ContextBlock[]) => void;
   initialBlocks?: ContextBlock[];
+  initialStackName?: string;
+  isLoading?: boolean;
   className?: string;
 }
 
@@ -31,19 +33,27 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   onExport,
   onSave,
   initialBlocks = [],
+  initialStackName = '',
+  isLoading = false,
   className = '',
 }) => {
-  const [blocks, setBlocks] = useState<ContextBlock[]>(initialBlocks);
-  const [newBlockType, setNewBlockType] = useState<'url' | 'text'>('url');
+  const [blocks, setBlocks] = useState<ContextBlock[]>([]);
+  const [newBlockType, setNewBlockType] = useState<'url' | 'text'>('text');
   const [newBlockContent, setNewBlockContent] = useState('');
-  const [stackName, setStackName] = useState('');
+  const [stackName, setStackName] = useState(initialStackName);
   const [isAddingBlock, setIsAddingBlock] = useState(false);
   const [exportFormat, setExportFormat] = useState<'xml' | 'markdown' | 'json'>('xml');
   const [isConverting, setIsConverting] = useState(false);
   const [importedBlockIds, setImportedBlockIds] = useState<Set<string>>(new Set());
   const [importNotification, setImportNotification] = useState<string>('');
+  const [savedContextSlug, setSavedContextSlug] = useState<string>('');
+  const [permalinkCopied, setPermalinkCopied] = useState(false);
+  const [isSavingForPermalink, setIsSavingForPermalink] = useState(false);
+  const [isRemixMode, setIsRemixMode] = useState(false);
+  const [hasAutoSaved, setHasAutoSaved] = useState(false);
+  const [autoSaveNotification, setAutoSaveNotification] = useState<string>('');
   const isImportingRef = useRef(false);
-  const debounceTimerRef = useRef<NodeJS.Timeout>();
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Function to actually perform the batch import
   const performBatchImport = useCallback(() => {
@@ -166,6 +176,17 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     }
   }, []); // Run only on mount after batch import check
 
+  // Handle remix/initial data updates
+  useEffect(() => {
+    if (initialBlocks.length > 0 && blocks.length === 0) {
+      setBlocks(initialBlocks);
+      setIsRemixMode(true);
+    }
+    if (initialStackName && !stackName) {
+      setStackName(initialStackName);
+    }
+  }, [initialBlocks, initialStackName, blocks.length, stackName]);
+
   // Save draft to localStorage whenever blocks or stackName changes
   useEffect(() => {
     // Only save if we have blocks or a stack name
@@ -182,6 +203,40 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     }
   }, [blocks, stackName]);
 
+  const generateFullContext = useCallback((): string => {
+    // Generate markdown format matching the single URL behavior
+    return blocks.map(block => {
+      if (block.type === 'url') {
+        return `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`;
+      }
+      return block.content;
+    }).join('\n\n---\n\n');
+  }, [blocks]);
+
+  const performAutoSave = useCallback(async () => {
+    if (!isRemixMode || hasAutoSaved || blocks.length === 0) return;
+    
+    try {
+      const contextStackData = {
+        title: stackName.trim() || `Context Stack - ${new Date().toLocaleDateString()}`,
+        blocks: blocks,
+        content: generateFullContext()
+      };
+      
+      const savedContext = await apiService.saveContextStack(contextStackData);
+      setSavedContextSlug(savedContext.slug);
+      setHasAutoSaved(true);
+      setIsRemixMode(false);
+      
+      const permalink = apiService.getSEOPageUrl(savedContext.slug);
+      setAutoSaveNotification(`Automatically created new context: ${permalink}`);
+      setTimeout(() => setAutoSaveNotification(''), 8000);
+      
+    } catch (error) {
+      console.error('Error auto-saving context stack:', error);
+    }
+  }, [isRemixMode, hasAutoSaved, blocks, stackName, generateFullContext]);
+
   const handleDragEnd = useCallback((sourceIndex: number, targetIndex: number) => {
     if (sourceIndex === targetIndex) return;
 
@@ -195,8 +250,12 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         // Update order property
         return newBlocks.map((item, index) => ({ ...item, order: index }));
       });
+      // Clear saved slug when blocks are reordered (for remix mode)
+      setSavedContextSlug('');
+      // Auto-save on first change if in remix mode
+      performAutoSave();
     });
-  }, []);
+  }, [performAutoSave]);
 
   const addUrlBlock = useCallback(async (url: string) => {
     if (!apiService.validateUrl(url)) {
@@ -267,6 +326,10 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       setBlocks(prev => [...prev, newBlock]);
       setNewBlockContent('');
       setIsAddingBlock(false);
+      // Clear saved slug when blocks are modified (for remix mode)
+      setSavedContextSlug('');
+      // Auto-save on first change if in remix mode
+      performAutoSave();
       
     } catch (error) {
       console.error('Error converting URL:', error);
@@ -294,8 +357,12 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       setBlocks(prev => [...prev, newBlock]);
       setNewBlockContent('');
       setIsAddingBlock(false);
+      // Clear saved slug when blocks are modified (for remix mode)
+      setSavedContextSlug('');
+      // Auto-save on first change if in remix mode
+      performAutoSave();
     }
-  }, [newBlockContent, newBlockType, blocks.length, addUrlBlock]);
+  }, [newBlockContent, newBlockType, blocks.length, addUrlBlock, performAutoSave]);
 
   const removeBlock = useCallback((blockId: string) => {
     requestAnimationFrame(() => {
@@ -303,14 +370,22 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         ...block,
         order: index
       })));
+      // Clear saved slug when blocks are modified (for remix mode)
+      setSavedContextSlug('');
+      // Auto-save on first change if in remix mode
+      performAutoSave();
     });
-  }, []);
+  }, [performAutoSave]);
 
   const updateBlock = useCallback((blockId: string, updates: Partial<ContextBlock>) => {
     setBlocks(prev => prev.map(block => 
       block.id === blockId ? { ...block, ...updates } : block
     ));
-  }, []);
+    // Clear saved slug when blocks are modified (for remix mode)
+    setSavedContextSlug('');
+    // Auto-save on first change if in remix mode
+    performAutoSave();
+  }, [performAutoSave]);
 
   const duplicateBlock = useCallback((block: ContextBlock) => {
     const newBlock: ContextBlock = {
@@ -324,7 +399,11 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
       ...b,
       order: index
     })));
-  }, [blocks.length]);
+    // Clear saved slug when blocks are modified (for remix mode)
+    setSavedContextSlug('');
+    // Auto-save on first change if in remix mode
+    performAutoSave();
+  }, [blocks.length, performAutoSave]);
 
   const handleExport = useCallback(() => {
     if (onExport) {
@@ -342,16 +421,6 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
     }
   }, [blocks, stackName, onSave]);
 
-  const generateFullContext = useCallback((): string => {
-    // Generate markdown format matching the single URL behavior
-    return blocks.map(block => {
-      if (block.type === 'url') {
-        return `# ${block.title || 'Untitled'}\n\nSource: ${block.url}\n\n---\n\n${block.content}`;
-      }
-      return block.content;
-    }).join('\n\n---\n\n');
-  }, [blocks]);
-
   const calculateTotalTokens = useCallback(() => {
     const fullContent = generateFullContext();
     return estimateTokenCount(fullContent);
@@ -367,7 +436,58 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
   const handleContextSaved = useCallback((slug: string) => {
     // Optional: Show success message or update UI
     console.log('Context stack saved with slug:', slug);
+    setSavedContextSlug(slug);
   }, []);
+
+  const handleCopyPermalink = useCallback(async () => {
+    if (blocks.length === 0) return;
+    
+    let targetSlug = savedContextSlug;
+    
+    // If we don't have a saved slug yet, save the context stack first
+    if (!targetSlug) {
+      setIsSavingForPermalink(true);
+      try {
+        const contextStackData = {
+          title: stackName.trim() || `Context Stack - ${new Date().toLocaleDateString()}`,
+          blocks: blocks,
+          content: generateFullContext()
+        };
+        
+        const savedContext = await apiService.saveContextStack(contextStackData);
+        targetSlug = savedContext.slug;
+        setSavedContextSlug(targetSlug);
+      } catch (error) {
+        console.error('Error saving context stack for permalink:', error);
+        return;
+      } finally {
+        setIsSavingForPermalink(false);
+      }
+    }
+    
+    if (targetSlug) {
+      const permalink = apiService.getSEOPageUrl(targetSlug);
+      try {
+        await navigator.clipboard.writeText(permalink);
+        setPermalinkCopied(true);
+        setTimeout(() => setPermalinkCopied(false), 2000);
+      } catch (error) {
+        console.error('Error copying permalink to clipboard:', error);
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = permalink;
+        document.body.appendChild(textArea);
+        textArea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (success) {
+          setPermalinkCopied(true);
+          setTimeout(() => setPermalinkCopied(false), 2000);
+        }
+      }
+    }
+  }, [blocks, savedContextSlug, stackName, generateFullContext]);
 
   const handleClearAll = useCallback(() => {
     if (blocks.length === 0 && !stackName.trim()) return;
@@ -427,6 +547,36 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
             <div className="text-sm text-green-800 flex items-center space-x-2">
               <div className="w-2 h-2 bg-green-500 rounded-full"></div>
               <span>{importNotification}</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Remix notification */}
+        {isRemixMode && initialStackName && (
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mb-4">
+            <div className="text-sm text-purple-800 flex items-center space-x-2">
+              <Layers className="w-4 h-4" />
+              <span><strong>Remixing:</strong> {initialStackName.replace(' (Remix -', ' -')} - Your first change will automatically create a new context</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Auto-save notification */}
+        {autoSaveNotification && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+            <div className="text-sm text-green-800 flex items-center space-x-2">
+              <Check className="w-4 h-4" />
+              <span>{autoSaveNotification}</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Loading state for remix */}
+        {isLoading && (
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
+            <div className="flex items-center space-x-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+              <span className="text-sm text-gray-700">Loading context for remix...</span>
             </div>
           </div>
         )}
@@ -494,33 +644,31 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
               <Download className="w-4 h-4 mr-2" />
               Export
             </button>
+            
+            <button
+              onClick={handleCopyPermalink}
+              disabled={blocks.length === 0 || isSavingForPermalink}
+              className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              {isSavingForPermalink ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  <span>Saving...</span>
+                </>
+              ) : permalinkCopied ? (
+                <>
+                  <Check className="w-4 h-4 mr-2" />
+                  <span>Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Link2 className="w-4 h-4 mr-2" />
+                  <span>Copy Permalink</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
-        
-        {/* Token Count Summary */}
-        {blocks.length > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-medium text-blue-900 mb-1">Context Usage</h4>
-                <p className="text-sm text-blue-700">
-                  Total: <span className="font-semibold">{formatTokenCount(calculateTotalTokens())}</span>
-                  {(() => {
-                    const usage = getContextUsage(calculateTotalTokens());
-                    return (
-                      <span className="ml-2 text-xs">
-                        ({usage.usagePercentage}% of GPT-4 context)
-                      </span>
-                    );
-                  })()}
-                </p>
-              </div>
-              <div className="text-xs text-blue-600">
-                <div>{blocks.length} block{blocks.length !== 1 ? 's' : ''}</div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Action Buttons using reusable component */}
         {blocks.length > 0 && (
@@ -656,6 +804,31 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
         </div>
       )}
 
+      {/* Token Count Summary */}
+      {blocks.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="text-sm font-medium text-blue-900 mb-1">Context Usage</h4>
+              <p className="text-sm text-blue-700">
+                Total: <span className="font-semibold">{formatTokenCount(calculateTotalTokens())}</span>
+                {(() => {
+                  const usage = getContextUsage(calculateTotalTokens());
+                  return (
+                    <span className="ml-2 text-xs">
+                      ({usage.usagePercentage}% of GPT-4 context)
+                    </span>
+                  );
+                })()}
+              </p>
+            </div>
+            <div className="text-xs text-blue-600">
+              <div>{blocks.length} block{blocks.length !== 1 ? 's' : ''}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Preview */}
       {blocks.length > 0 && (
         <div className="bg-gray-50 rounded-lg border border-gray-200 p-6">
@@ -667,11 +840,35 @@ const ContextBuilder: React.FC<ContextBuilderProps> = ({
           </pre>
           
           {/* Action Buttons for Preview */}
-          <ActionButtons
-            contextBlocks={blocks}
-            contextContent={generateFullContext()}
-            onContextSaved={handleContextSaved}
-          />
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleCopyPermalink}
+              disabled={blocks.length === 0 || isSavingForPermalink}
+              className="inline-flex items-center px-4 py-2 bg-purple-100 hover:bg-purple-200 disabled:bg-gray-50 disabled:cursor-not-allowed rounded-lg transition-colors"
+            >
+              {isSavingForPermalink ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-600 mr-2"></div>
+                  <span>Saving...</span>
+                </>
+              ) : permalinkCopied ? (
+                <>
+                  <Check className="w-4 h-4 mr-2" />
+                  <span>Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Link2 className="w-4 h-4 mr-2" />
+                  <span>Copy Permalink</span>
+                </>
+              )}
+            </button>
+            <ActionButtons
+              contextBlocks={blocks}
+              contextContent={generateFullContext()}
+              onContextSaved={handleContextSaved}
+            />
+          </div>
         </div>
       )}
     </div>

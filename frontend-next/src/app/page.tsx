@@ -3,10 +3,13 @@
 
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import ConversionForm from '@/components/ConversionForm';
 import ContextBuilder from '@/components/ContextBuilder';
 import { Link2, Layers } from 'lucide-react';
+import { apiService } from '@/services/api';
+import { parseContextBlocksFromContent, generateRemixTitle, isContextStack } from '@/utils/contextParser';
 
 interface ContextBlock {
   id: string;
@@ -18,7 +21,41 @@ interface ContextBlock {
 }
 
 export default function Home() {
+  const searchParams = useSearchParams();
+  const remixSlug = searchParams.get('remix');
+  
   const [activeTab, setActiveTab] = useState<'single' | 'context'>('single');
+  const [remixBlocks, setRemixBlocks] = useState<ContextBlock[]>([]);
+  const [remixTitle, setRemixTitle] = useState<string>('');
+  const [isLoadingRemix, setIsLoadingRemix] = useState(false);
+
+  // Handle remix functionality
+  useEffect(() => {
+    if (remixSlug) {
+      setIsLoadingRemix(true);
+      setActiveTab('context');
+      
+      const loadRemixContent = async () => {
+        try {
+          const conversion = await apiService.getConversionBySlug(remixSlug);
+          
+          if (isContextStack(conversion)) {
+            const parsedBlocks = parseContextBlocksFromContent(conversion.content);
+            setRemixBlocks(parsedBlocks);
+            setRemixTitle(generateRemixTitle(conversion.title || 'Context Stack'));
+          } else {
+            console.error('Cannot remix: not a context stack');
+          }
+        } catch (error) {
+          console.error('Error loading content for remix:', error);
+        } finally {
+          setIsLoadingRemix(false);
+        }
+      };
+      
+      loadRemixContent();
+    }
+  }, [remixSlug]);
 
   const handleExport = (blocks: ContextBlock[], format: string) => {
     // Generate and download the context in the specified format
@@ -121,6 +158,9 @@ export default function Home() {
           <ContextBuilder 
             onExport={handleExport}
             onSave={handleSave}
+            initialBlocks={remixBlocks}
+            initialStackName={remixTitle}
+            isLoading={isLoadingRemix}
           />
         )}
       </div>
